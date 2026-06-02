@@ -1,7 +1,9 @@
-export default function Home() {
+import { Chat } from "@/components/chat/chat";
+
+export default function Home(): React.JSX.Element {
 	return (
-		<main>
-			<h1>noledge</h1>
+		<main className="flex h-svh flex-col">
+			<Chat />
 		</main>
 	);
 }

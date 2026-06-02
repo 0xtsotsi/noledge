@@ -23,6 +23,11 @@
 			"quoteStyle": "double"
 		}
 	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	},
 	"assist": {
 		"enabled": true,
 		"actions": {
@@ -30,5 +35,31 @@
 				"organizeImports": "on"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["**/prompt-kit/**", "**/components/ui/**"],
+			"linter": {
+				"domains": {
+					"next": "none",
+					"react": "none"
+				},
+				"rules": {
+					"recommended": false,
+					"suspicious": {
+						"noArrayIndexKey": "off"
+					},
+					"security": {
+						"noDangerouslySetInnerHtml": "off"
+					},
+					"performance": {
+						"noImgElement": "off"
+					},
+					"correctness": {
+						"useExhaustiveDependencies": "off"
+					}
+				}
+			}
+		}
+	]
 }
