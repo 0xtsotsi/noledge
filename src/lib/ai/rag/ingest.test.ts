@@ -120,6 +120,140 @@ describe("ingest + retrieve", () => {
 		expect(retrieved.chunks[0]?.documentTitle).toBe("Cats");
 	});
 
+	it("returns exactly the matching doc under a strict minScore (overfetch regression)", async () => {
+		db = openDatabase(":memory:");
+		const docs = [
+			{ title: "Cats", text: "The cat sat on the warm windowsill." },
+			{ title: "Finance", text: "Quarterly finance report shows revenue." },
+			{ title: "Weather", text: "The weather forecast predicts rain." },
+		];
+		for (const doc of docs) {
+			await ingestDocument(
+				{
+					data: Buffer.from(doc.text, "utf8"),
+					filename: `${doc.title}.txt`,
+					mime: "text/plain",
+					title: doc.title,
+				},
+				{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+			);
+		}
+
+		// Strict floor with the keyword arm off; only the cat chunk clears it, and
+		// the result is sliced — never throws, never under-returns the survivor.
+		const retrieved = await retrieveChunks("cat", {
+			db,
+			embedder,
+			topK: 3,
+			hybrid: false,
+			vectorWeight: 1,
+			textWeight: 0,
+			minScore: 0.9,
+		});
+		expect(retrieved.ok).toBe(true);
+		if (!retrieved.ok) return;
+		expect(retrieved.chunks).toHaveLength(1);
+		expect(retrieved.chunks[0]?.documentTitle).toBe("Cats");
+	});
+
+	it("surfaces a keyword-only match the vector arm cannot represent", async () => {
+		db = openDatabase(":memory:");
+		const docs = [
+			{ title: "Cats", text: "The cat sat on the warm windowsill." },
+			{ title: "Errors", text: "System aborted with code ERRX9213 overnight." },
+		];
+		for (const doc of docs) {
+			await ingestDocument(
+				{
+					data: Buffer.from(doc.text, "utf8"),
+					filename: `${doc.title}.txt`,
+					mime: "text/plain",
+					title: doc.title,
+				},
+				{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+			);
+		}
+
+		// The fake embedder has no axis for "ERRX9213" (falls back to one-hot at
+		// index 1535, orthogonal to every doc) — only the keyword arm can find it.
+		const retrieved = await retrieveChunks("ERRX9213", {
+			db,
+			embedder,
+			topK: 3,
+		});
+		expect(retrieved.ok).toBe(true);
+		if (!retrieved.ok) return;
+		const titles = retrieved.chunks.map((chunk) => chunk.documentTitle);
+		expect(titles).toContain("Errors");
+	});
+
+	it("ranks a chunk strong in both arms above one strong in a single arm", async () => {
+		db = openDatabase(":memory:");
+		const docs = [
+			// Matches the "cat" vector axis AND contains the keyword "whiskers".
+			{ title: "Both", text: "The cat groomed its whiskers on the sill." },
+			// Only the keyword arm (whiskers); vector axis is unrelated.
+			{
+				title: "KeywordOnly",
+				text: "Spare whiskers were sold at the finance fair.",
+			},
+		];
+		for (const doc of docs) {
+			await ingestDocument(
+				{
+					data: Buffer.from(doc.text, "utf8"),
+					filename: `${doc.title}.txt`,
+					mime: "text/plain",
+					title: doc.title,
+				},
+				{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+			);
+		}
+
+		const retrieved = await retrieveChunks("cat whiskers", {
+			db,
+			embedder,
+			topK: 2,
+			mmr: false,
+		});
+		expect(retrieved.ok).toBe(true);
+		if (!retrieved.ok) return;
+		expect(retrieved.chunks[0]?.documentTitle).toBe("Both");
+	});
+
+	it("keeps the FTS index consistent after a document is deleted", async () => {
+		db = openDatabase(":memory:");
+		const ingest = await ingestDocument(
+			{
+				data: Buffer.from(
+					"System aborted with code ERRX9213 overnight.",
+					"utf8",
+				),
+				filename: "Errors.txt",
+				mime: "text/plain",
+				title: "Errors",
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(ingest.ok).toBe(true);
+
+		// Delete the chunks (fires the chunks_fts delete trigger).
+		db.prepare("DELETE FROM chunks").run();
+
+		// A plain DELETE on an external-content FTS table would leave the index
+		// malformed; the trigger's FTS5 'delete' command keeps a MATCH probe valid
+		// and empty rather than throwing "database disk image is malformed".
+		const probe = db
+			.prepare("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1")
+			.get('"ERRX9213"');
+		expect(probe).toBeUndefined();
+
+		// An integrity check passes only when postings were removed correctly.
+		expect(() =>
+			db?.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')"),
+		).not.toThrow();
+	});
+
 	it("rejects a document with no extractable text", async () => {
 		db = openDatabase(":memory:");
 		const result = await ingestDocument(

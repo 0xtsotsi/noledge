@@ -9,6 +9,7 @@ const chunks: RetrievedChunk[] = [
 		documentTitle: "Cat Facts",
 		content: "Cats sleep a lot.",
 		distance: 0.1,
+		score: 0.9,
 	},
 	{
 		chunkId: "c2",
@@ -16,6 +17,7 @@ const chunks: RetrievedChunk[] = [
 		documentTitle: "Cat Facts",
 		content: "Cats purr when content.",
 		distance: 0.2,
+		score: 0.8,
 	},
 ];
 

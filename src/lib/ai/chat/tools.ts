@@ -25,10 +25,13 @@ export function createKnowledgeTools(signal: AbortSignal): KnowledgeTools {
 		searchKnowledge: tool({
 			description:
 				"Search the user's ingested knowledge base (documents they uploaded) " +
-				"for passages relevant to a query. Call this whenever the answer may " +
-				"depend on the user's own documents. You may call it several times " +
-				"with refined queries to gather enough context before answering. " +
-				"Cite the returned source titles when you rely on them.",
+				"for passages relevant to a query. Uses hybrid retrieval — exact " +
+				"keyword (full-text) matching fused with semantic vector search — so " +
+				"both rare exact terms (codes, names) and paraphrased concepts are " +
+				"found. Call this whenever the answer may depend on the user's own " +
+				"documents. You may call it several times with refined queries to " +
+				"gather enough context before answering. Cite the returned source " +
+				"titles when you rely on them.",
 			inputSchema: z.object({
 				query: z
 					.string()

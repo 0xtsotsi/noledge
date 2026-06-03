@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkText } from "./chunk";
+import { chunkText, chunkTextWithSpans } from "./chunk";
 
 describe("chunkText", () => {
 	it("returns no chunks for whitespace-only input", () => {
@@ -50,5 +50,37 @@ describe("chunkText", () => {
 			expect(chunk).toBe(chunk.trim());
 		}
 		expect(chunks.join(" ")).toContain("foxtrot");
+	});
+
+	it("measures size in tokens (~len/4) under unit:'token'", () => {
+		// 80-char line; ~20 tokens. size:5 tokens (~20 chars) forces ~4 chunks.
+		const text =
+			"alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+		const tokenChunks = chunkText(text, { unit: "token", size: 5, overlap: 0 });
+		expect(tokenChunks.length).toBeGreaterThan(1);
+		// Each chunk should be roughly within the token budget (5 tokens ≈ 20 chars).
+		for (const chunk of tokenChunks) {
+			expect(Math.ceil(chunk.length / 4)).toBeLessThanOrEqual(6);
+		}
+	});
+});
+
+describe("chunkTextWithSpans", () => {
+	it("offsets reconstruct each chunk from the normalized text (char mode)", () => {
+		const text = "abcdefghijklmnopqrstuvwxyz";
+		const spans = chunkTextWithSpans(text, { size: 10, overlap: 4 });
+		expect(spans.length).toBeGreaterThan(1);
+		for (const span of spans) {
+			expect(text.slice(span.start, span.end)).toBe(span.content);
+		}
+	});
+
+	it("returns a single full-text span when text fits", () => {
+		const spans = chunkTextWithSpans("short text", { size: 100 });
+		expect(spans).toEqual([{ content: "short text", start: 0, end: 10 }]);
+	});
+
+	it("returns no spans for whitespace-only input", () => {
+		expect(chunkTextWithSpans("   \n\t  ")).toEqual([]);
 	});
 });

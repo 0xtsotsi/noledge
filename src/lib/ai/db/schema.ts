@@ -62,4 +62,100 @@ export function migrate(db: Database): void {
 
 		CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id ON conversation_messages(conversation_id);
 	`);
+
+	addChunkSpanColumns(db);
+	createChunksFts(db);
+}
+
+/**
+ * Add nullable `start`/`end` char-offset columns to `chunks` if absent. SQLite
+ * does not support `ADD COLUMN IF NOT EXISTS`, so detect via `PRAGMA table_info`
+ * before issuing `ALTER TABLE`.
+ */
+function addChunkSpanColumns(db: Database): void {
+	const columns = db.prepare("PRAGMA table_info(chunks)").all() as {
+		name: string;
+	}[];
+	const present = new Set(columns.map((column) => column.name));
+	if (!present.has("start")) {
+		db.exec("ALTER TABLE chunks ADD COLUMN start INTEGER");
+	}
+	if (!present.has("end")) {
+		db.exec("ALTER TABLE chunks ADD COLUMN end INTEGER");
+	}
+}
+
+/**
+ * Create the FTS5 keyword index mirroring `chunks.content`, keyed on the implicit
+ * `rowid` (external-content table), plus triggers that keep it in sync with the
+ * `chunks` table on every insert/update/delete.
+ *
+ * The delete/update triggers use the FTS5 `'delete'` command
+ * (`INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', ...)`),
+ * which is mandatory for external-content tables: a plain `DELETE` cannot remove
+ * the correct postings because FTS5 needs the original column values, and doing
+ * so leaves the index malformed. With triggers in place, ingest/delete code paths
+ * touch only `chunks` and the index follows automatically.
+ *
+ * For databases that predate the FTS table the index starts empty; detect that
+ * and run the FTS5 `'rebuild'` command once to backfill from the content table.
+ *
+ * All of this is wrapped in try/catch: if the better-sqlite3 build lacks FTS5,
+ * retrieval degrades to vector-only at query time rather than failing to open the
+ * database.
+ */
+function createChunksFts(db: Database): void {
+	try {
+		db.exec(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+				content,
+				content='chunks',
+				content_rowid='rowid',
+				tokenize='unicode61'
+			);
+
+			CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+				INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+			END;
+
+			CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+				INSERT INTO chunks_fts(chunks_fts, rowid, content)
+				VALUES ('delete', old.rowid, old.content);
+			END;
+
+			CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+				INSERT INTO chunks_fts(chunks_fts, rowid, content)
+				VALUES ('delete', old.rowid, old.content);
+				INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+			END;`,
+		);
+
+		const chunkCount = (
+			db.prepare("SELECT COUNT(*) AS count FROM chunks").get() as {
+				count: number;
+			}
+		).count;
+		if (chunkCount === 0) return;
+
+		// Probe whether the index already resolves a known chunk; if not, it predates
+		// the FTS table (or was never built) and needs a one-time rebuild. The probe
+		// keys on a chunk's own first token so it works for any corpus.
+		const sample = db
+			.prepare("SELECT rowid, content FROM chunks LIMIT 1")
+			.get() as { rowid: number; content: string } | undefined;
+		if (!sample) return;
+		const token = sample.content.toLowerCase().match(/[\p{L}\p{N}]+/u)?.[0];
+		if (!token) return;
+		const hit = db
+			.prepare(
+				"SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? AND rowid = ? LIMIT 1",
+			)
+			.get(`"${token}"`, sample.rowid);
+		if (hit === undefined) {
+			db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')");
+		}
+	} catch {
+		// FTS5 unavailable in this SQLite build — hybrid search falls back to
+		// vector-only at query time (keyword arm guards on table existence).
+	}
 }

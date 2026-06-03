@@ -103,7 +103,10 @@ export async function DELETE(request: Request): Promise<Response> {
 			.all(documentId) as { id: string }[];
 		const deleteVec = db.prepare("DELETE FROM vec_chunks WHERE chunk_id = ?");
 		for (const chunk of chunkIds) deleteVec.run(chunk.id);
-		// `chunks` cascade-deletes via the FK, but delete explicitly to be safe.
+		// Deleting from `chunks` fires the chunks_fts delete trigger, which removes
+		// the matching FTS rows via the FTS5 'delete' command (required for
+		// external-content tables). `chunks` would also cascade via the FK, but we
+		// delete explicitly so the trigger runs deterministically here.
 		db.prepare("DELETE FROM chunks WHERE document_id = ?").run(documentId);
 		const info = db
 			.prepare("DELETE FROM documents WHERE id = ?")
