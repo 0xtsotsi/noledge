@@ -92,9 +92,11 @@ export function migrate(db: Database): void {
 /**
  * Add nullable provenance columns to `documents` if absent — they tie an ingested
  * document back to the automation source it came from and enable dedup. Manual
- * uploads leave all three NULL. SQLite has no `ADD COLUMN IF NOT EXISTS`, so we
- * detect via `PRAGMA table_info` first, then create the partial unique index that
- * guards against re-ingesting the same `(source_id, external_id)` pair.
+ * uploads leave source_id/external_id/source_url NULL but still record
+ * content_hash for upload-level dedup. SQLite has no `ADD COLUMN IF NOT EXISTS`,
+ * so we detect via `PRAGMA table_info` first, then create the partial unique index
+ * that guards against re-ingesting the same `(source_id, external_id)` pair plus a
+ * lookup index over content_hash.
  */
 function addDocumentProvenanceColumns(db: Database): void {
 	const columns = db.prepare("PRAGMA table_info(documents)").all() as {
@@ -110,10 +112,20 @@ function addDocumentProvenanceColumns(db: Database): void {
 	if (!present.has("source_url")) {
 		db.exec("ALTER TABLE documents ADD COLUMN source_url TEXT");
 	}
+	// SHA-256 of the extracted text, used to dedup manual uploads (which have no
+	// source_id/external_id to key on). Stored for every document; the dedup check
+	// only consults it for manual uploads (source_id IS NULL).
+	if (!present.has("content_hash")) {
+		db.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT");
+	}
 	// Dedup guard: a given source can hold at most one document per external id.
 	// Manual uploads (external_id IS NULL) are unaffected by the partial index.
 	db.exec(
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_external ON documents(source_id, external_id) WHERE external_id IS NOT NULL",
+	);
+	// Lookup index for manual-upload content dedup.
+	db.exec(
+		"CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash) WHERE content_hash IS NOT NULL",
 	);
 }
 

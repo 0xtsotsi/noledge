@@ -4,6 +4,7 @@ import {
 	type AutomationSource,
 	addSource,
 	deleteSource,
+	findDuplicateSource,
 	listSources,
 } from "@/lib/ai/automate/store";
 import { resolveChannel } from "@/lib/ai/automate/youtube/channel";
@@ -63,6 +64,13 @@ export async function POST(request: Request): Promise<Response> {
 		if (!preview.ok) {
 			return Response.json({ error: preview.error }, { status: 422 });
 		}
+		const duplicate = findDuplicateSource({ type: "rss", url: trimmedUrl });
+		if (duplicate) {
+			return Response.json(
+				{ error: "This feed has already been added." },
+				{ status: 409 },
+			);
+		}
 		const source = addSource({
 			type: "rss",
 			url: trimmedUrl,
@@ -74,6 +82,17 @@ export async function POST(request: Request): Promise<Response> {
 	const resolved = await resolveChannel(trimmedUrl);
 	if (!resolved.ok) {
 		return Response.json({ error: resolved.error }, { status: 422 });
+	}
+	const duplicate = findDuplicateSource({
+		type: "youtube",
+		url: trimmedUrl,
+		identifier: resolved.channel.channelId,
+	});
+	if (duplicate) {
+		return Response.json(
+			{ error: "This channel has already been added." },
+			{ status: 409 },
+		);
 	}
 	const source = addSource({
 		type: "youtube",

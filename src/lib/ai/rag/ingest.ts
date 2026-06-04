@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
 import { getDatabase } from "@/lib/ai/db/client";
 import { embedTexts, toVectorBlob } from "@/lib/ai/embeddings/embed";
@@ -44,7 +44,7 @@ export type IngestTextInput = {
 };
 
 export type IngestResult =
-	| { ok: true; documentId: string; chunks: number }
+	| { ok: true; documentId: string; chunks: number; duplicate: boolean }
 	| { ok: false; error: string };
 
 export type IngestOptions = {
@@ -96,6 +96,31 @@ export async function ingestText(
 	const db = options.db ?? getDatabase();
 	const embedder = options.embedder ?? embedTexts;
 
+	const contentHash = createHash("sha256").update(input.text).digest("hex");
+
+	// Manual uploads carry no (source_id, external_id) to dedup on, so guard them
+	// by content hash: an identical upload returns the existing document instead of
+	// re-embedding and storing a duplicate. Automation items keep their per-source
+	// (source_id, external_id) dedup and are intentionally not deduped globally.
+	if (input.sourceId === undefined) {
+		const existing = db
+			.prepare(
+				"SELECT id FROM documents WHERE content_hash = ? AND source_id IS NULL LIMIT 1",
+			)
+			.get(contentHash) as { id: string } | undefined;
+		if (existing) {
+			const { count } = db
+				.prepare("SELECT COUNT(*) AS count FROM chunks WHERE document_id = ?")
+				.get(existing.id) as { count: number };
+			return {
+				ok: true,
+				documentId: existing.id,
+				chunks: count,
+				duplicate: true,
+			};
+		}
+	}
+
 	const chunks = chunkTextWithSpans(
 		input.text,
 		options.chunkOptions ?? DEFAULT_CHUNK_OPTIONS,
@@ -117,7 +142,7 @@ export async function ingestText(
 	const title = input.title.trim() || input.filename;
 
 	const insertDocument = db.prepare(
-		"INSERT INTO documents (id, title, filename, mime, bytes, created_at, source_id, external_id, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO documents (id, title, filename, mime, bytes, created_at, source_id, external_id, source_url, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	);
 	const insertChunk = db.prepare(
 		"INSERT INTO chunks (id, document_id, ordinal, content, start, end) VALUES (?, ?, ?, ?, ?, ?)",
@@ -137,6 +162,7 @@ export async function ingestText(
 			input.sourceId ?? null,
 			input.externalId ?? null,
 			input.sourceUrl ?? null,
+			contentHash,
 		);
 		chunks.forEach((chunk, ordinal) => {
 			const chunkId = randomUUID();
@@ -165,5 +191,5 @@ export async function ingestText(
 		};
 	}
 
-	return { ok: true, documentId, chunks: chunks.length };
+	return { ok: true, documentId, chunks: chunks.length, duplicate: false };
 }

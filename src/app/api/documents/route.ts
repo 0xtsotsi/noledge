@@ -61,6 +61,7 @@ export async function POST(request: Request): Promise<Response> {
 	return Response.json({
 		documentId: result.documentId,
 		chunks: result.chunks,
+		duplicate: result.duplicate,
 	});
 }
 

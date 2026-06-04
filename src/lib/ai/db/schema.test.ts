@@ -52,6 +52,7 @@ describe("migrate", () => {
 		expect(docCols.has("source_id")).toBe(true);
 		expect(docCols.has("external_id")).toBe(true);
 		expect(docCols.has("source_url")).toBe(true);
+		expect(docCols.has("content_hash")).toBe(true);
 
 		expect(tableExists(db, "automation_sources")).toBe(true);
 		expect(tableExists(db, "automation_config")).toBe(true);

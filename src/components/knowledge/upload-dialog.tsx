@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-type PendingStatus = "pending" | "uploading" | "done" | "error";
+type PendingStatus = "pending" | "uploading" | "done" | "duplicate" | "error";
 
 type PendingFile = {
 	id: string;
@@ -92,7 +92,9 @@ export function UploadDialog({
 	);
 
 	const upload = useCallback(async (): Promise<void> => {
-		const queue = files.filter((item) => item.status !== "done");
+		const queue = files.filter(
+			(item) => item.status !== "done" && item.status !== "duplicate",
+		);
 		if (queue.length === 0) return;
 
 		setBusy(true);
@@ -109,7 +111,10 @@ export function UploadDialog({
 				});
 				if (response.ok) {
 					anyOk = true;
-					setStatus(item.id, { status: "done" });
+					const data = (await response.json()) as { duplicate?: boolean };
+					setStatus(item.id, {
+						status: data.duplicate ? "duplicate" : "done",
+					});
 				} else {
 					const data = (await response.json()) as { error?: string };
 					setStatus(item.id, { status: "error", error: data.error });
@@ -127,8 +132,13 @@ export function UploadDialog({
 	}, [files, onUploaded, setStatus]);
 
 	const allDone =
-		files.length > 0 && files.every((item) => item.status === "done");
-	const pendingCount = files.filter((item) => item.status !== "done").length;
+		files.length > 0 &&
+		files.every(
+			(item) => item.status === "done" || item.status === "duplicate",
+		);
+	const pendingCount = files.filter(
+		(item) => item.status !== "done" && item.status !== "duplicate",
+	).length;
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
@@ -194,6 +204,8 @@ export function UploadDialog({
 									<CircleNotch className="size-4 shrink-0 animate-spin text-muted-foreground" />
 								) : item.status === "done" ? (
 									<CheckCircle className="size-4 shrink-0 text-emerald-600 dark:text-emerald-500" />
+								) : item.status === "duplicate" ? (
+									<CheckCircle className="size-4 shrink-0 text-muted-foreground" />
 								) : (
 									<FileText
 										className={cn(
@@ -209,6 +221,10 @@ export function UploadDialog({
 									{item.status === "error" ? (
 										<p className="truncate text-xs text-destructive">
 											{item.error ?? "Failed"}
+										</p>
+									) : item.status === "duplicate" ? (
+										<p className="truncate text-xs text-muted-foreground">
+											Already in knowledge base
 										</p>
 									) : (
 										<p className="text-xs text-muted-foreground">

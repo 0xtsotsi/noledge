@@ -139,6 +139,32 @@ export type NewSource = {
 	title?: string | null;
 };
 
+/**
+ * Find an existing source that is the same feed/channel as the one being added,
+ * so the add route can reject duplicates before re-ingesting the whole backlog.
+ * YouTube channels are matched on their resolved `identifier` (channelId, stable
+ * across URL/@handle variants); RSS feeds are matched on their `url`.
+ */
+export function findDuplicateSource(
+	input: NewSource,
+	db: Database = getDatabase(),
+): AutomationSource | undefined {
+	if (input.type === "youtube" && input.identifier) {
+		const row = db
+			.prepare(
+				"SELECT * FROM automation_sources WHERE type = 'youtube' AND identifier = ? LIMIT 1",
+			)
+			.get(input.identifier) as SourceRow | undefined;
+		return row ? mapSource(row) : undefined;
+	}
+	const row = db
+		.prepare(
+			"SELECT * FROM automation_sources WHERE type = ? AND url = ? LIMIT 1",
+		)
+		.get(input.type, input.url) as SourceRow | undefined;
+	return row ? mapSource(row) : undefined;
+}
+
 /** Insert a new (resolved) source. Returns the stored row. */
 export function addSource(
 	input: NewSource,

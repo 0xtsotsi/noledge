@@ -139,7 +139,8 @@ async function pollRssSource(
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
 		if (ingested.ok) {
-			result.added += 1;
+			if (ingested.duplicate) result.skipped += 1;
+			else result.added += 1;
 		} else {
 			result.status = result.added > 0 ? "partial" : "error";
 			result.error = ingested.error;
@@ -209,7 +210,8 @@ async function pollYoutubeSource(
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
 		if (ingested.ok) {
-			result.added += 1;
+			if (ingested.duplicate) result.skipped += 1;
+			else result.added += 1;
 		} else {
 			result.status = result.added > 0 ? "partial" : "error";
 			result.error = ingested.error;

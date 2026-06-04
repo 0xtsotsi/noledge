@@ -311,6 +311,76 @@ describe("ingest + retrieve", () => {
 		expect(second.ok).toBe(false);
 	});
 
+	it("dedups identical manual uploads by content hash", async () => {
+		db = openDatabase(":memory:");
+		const first = await ingestDocument(
+			{
+				data: Buffer.from("The cat sat on the warm windowsill.", "utf8"),
+				filename: "cat.txt",
+				mime: "text/plain",
+				title: "Cat",
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+		expect(first.duplicate).toBe(false);
+
+		// Same content, different filename/title — still a duplicate upload.
+		const second = await ingestDocument(
+			{
+				data: Buffer.from("The cat sat on the warm windowsill.", "utf8"),
+				filename: "cat-copy.txt",
+				mime: "text/plain",
+				title: "Cat Copy",
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(second.ok).toBe(true);
+		if (!second.ok) return;
+		expect(second.duplicate).toBe(true);
+		expect(second.documentId).toBe(first.documentId);
+
+		// Only one document row exists.
+		const { count } = db
+			.prepare("SELECT COUNT(*) AS count FROM documents")
+			.get() as { count: number };
+		expect(count).toBe(1);
+	});
+
+	it("does not dedup an automation item against a manual upload of the same text", async () => {
+		db = openDatabase(":memory:");
+		const text = "The cat sat on the warm windowsill.";
+		const manual = await ingestDocument(
+			{
+				data: Buffer.from(text, "utf8"),
+				filename: "cat.txt",
+				mime: "text/plain",
+				title: "Cat",
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(manual.ok).toBe(true);
+
+		// An automation item carries source provenance and is keyed by
+		// (source_id, external_id), so it ingests independently.
+		const auto = await ingestText(
+			{
+				text,
+				title: "Cat",
+				filename: "cat",
+				mime: "text/plain",
+				bytes: 10,
+				sourceId: "src-1",
+				externalId: "vid-1",
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(auto.ok).toBe(true);
+		if (!auto.ok) return;
+		expect(auto.duplicate).toBe(false);
+	});
+
 	it("rejects a document with no extractable text", async () => {
 		db = openDatabase(":memory:");
 		const result = await ingestDocument(
