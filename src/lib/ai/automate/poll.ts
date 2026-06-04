@@ -2,9 +2,11 @@ import type { Database } from "better-sqlite3";
 import { getDatabase } from "@/lib/ai/db/client";
 import { embedTexts } from "@/lib/ai/embeddings/embed";
 import { resolveProviderKey } from "@/lib/ai/models/provider-config";
+import { extractText } from "@/lib/ai/rag/extract";
 import type { Embedder } from "@/lib/ai/rag/ingest";
 import { ingestText } from "@/lib/ai/rag/ingest";
 import { getPaperProvider, isPaperType } from "./papers";
+import { httpBinary } from "./papers/http";
 import { fetchFeed } from "./rss/parse";
 import {
 	type AutomationSource,
@@ -98,6 +100,51 @@ function feedItemBytes(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
+async function paperIngestPayload(
+	item: {
+		title: string;
+		abstract: string;
+		url: string;
+		pdfUrl?: string;
+	},
+	signal?: AbortSignal,
+): Promise<
+	| { ok: true; text: string; bytes: number; mime: string; filename: string }
+	| { ok: false; reason: string }
+> {
+	if (!item.pdfUrl) {
+		return { ok: false, reason: "No full-text PDF URL was available." };
+	}
+
+	const fetched = await httpBinary(item.pdfUrl, {
+		accept: "application/pdf, application/octet-stream",
+		signal,
+	});
+	if (!fetched.ok) return { ok: false, reason: fetched.error };
+	if (fetched.status < 200 || fetched.status >= 300) {
+		return { ok: false, reason: `PDF returned ${fetched.status}.` };
+	}
+
+	const extracted = await extractText(
+		fetched.body,
+		`${item.title || "paper"}.pdf`,
+		fetched.mime,
+		signal,
+	);
+	if (!extracted.ok) return { ok: false, reason: extracted.error };
+	if (extracted.text.trim().length <= item.abstract.length) {
+		return { ok: false, reason: "Full text extraction was not usable." };
+	}
+
+	return {
+		ok: true,
+		text: extracted.text,
+		bytes: fetched.body.byteLength,
+		mime: fetched.mime,
+		filename: item.pdfUrl,
+	};
+}
+
 async function pollRssSource(
 	source: AutomationSource,
 	deps: {
@@ -153,6 +200,7 @@ async function pollRssSource(
 				sourceId: source.id,
 				externalId,
 				sourceUrl: item.link || undefined,
+				publishedAt: item.publishedAt,
 			},
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
@@ -214,17 +262,23 @@ async function pollPaperSource(
 			continue;
 		}
 
-		const text = `${item.title}\n\n${item.abstract}`.trim();
+		const payload = await paperIngestPayload(item, deps.signal);
+		if (!payload.ok) {
+			result.skipped += 1;
+			result.error = payload.reason;
+			continue;
+		}
 		const ingested = await ingestText(
 			{
-				text,
+				text: payload.text,
 				title: item.title || item.externalId,
-				filename: item.url || item.externalId,
-				mime: "text/plain",
-				bytes: feedItemBytes(text),
+				filename: payload.filename,
+				mime: payload.mime,
+				bytes: payload.bytes,
 				sourceId: source.id,
 				externalId: item.externalId,
 				sourceUrl: item.url || undefined,
+				publishedAt: item.publishedAt,
 			},
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
@@ -296,6 +350,7 @@ async function pollYoutubeSource(
 				sourceId: source.id,
 				externalId: video.videoId,
 				sourceUrl: video.url,
+				publishedAt: video.publishedAt,
 			},
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);

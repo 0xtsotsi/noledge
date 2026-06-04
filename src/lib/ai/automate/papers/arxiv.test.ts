@@ -34,9 +34,11 @@ describe("parseArxiv", () => {
 		);
 		expect(first?.abstract).toContain("Multi-agent reasoning systems");
 		expect(first?.url).toBe("https://arxiv.org/abs/2606.05158v1");
+		expect(first?.pdfUrl).toBe("https://arxiv.org/pdf/2606.05158v1");
 		expect(first?.publishedAt).toBe(Date.parse("2026-06-03T17:57:04Z"));
 
 		expect(second?.externalId).toBe("2606.04000v2");
+		expect(second?.pdfUrl).toBe("https://arxiv.org/pdf/2606.04000v2");
 		expect(second?.title).toBe("Another Paper & Title");
 	});
 

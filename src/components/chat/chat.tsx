@@ -9,6 +9,7 @@ import {
 } from "@/components/prompt-kit/chat-container";
 import { ScrollButton } from "@/components/prompt-kit/scroll-button";
 import { Button } from "@/components/ui/button";
+import { usePromptSuggestions } from "@/hooks/use-prompt-suggestions";
 import type {
 	ChatMessage as ApiMessage,
 	ChatStreamChunk,
@@ -80,6 +81,7 @@ export function Chat(): React.JSX.Element {
 	const [input, setInput] = useState("");
 	const [status, setStatus] = useState<ChatStatus>("ready");
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
+	const { suggestions } = usePromptSuggestions();
 	const [model, setModel] = useState<string | null>(() => {
 		if (typeof window === "undefined") return null;
 		try {
@@ -280,6 +282,7 @@ export function Chat(): React.JSX.Element {
 						messages: toApiMessages(history),
 						model: modelRef.current ?? undefined,
 						thinking: thinkingRef.current,
+						timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 					}),
 					signal: controller.signal,
 				});
@@ -506,6 +509,7 @@ export function Chat(): React.JSX.Element {
 								thinking={thinking}
 								onThinkingChange={setThinking}
 								thinkingSupported={thinkingSupported}
+								suggestions={suggestions}
 							/>
 						</>
 					)}
@@ -550,6 +554,7 @@ export function Chat(): React.JSX.Element {
 					thinking={thinking}
 					onThinkingChange={setThinking}
 					thinkingSupported={thinkingSupported}
+					suggestions={suggestions}
 				/>
 			</div>
 		</div>

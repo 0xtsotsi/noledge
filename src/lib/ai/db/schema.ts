@@ -118,6 +118,11 @@ function addDocumentProvenanceColumns(db: Database): void {
 	if (!present.has("content_hash")) {
 		db.exec("ALTER TABLE documents ADD COLUMN content_hash TEXT");
 	}
+	// Publication timestamp from the external source, when available. Date-aware
+	// retrieval falls back to created_at for uploads/sources without publish dates.
+	if (!present.has("published_at")) {
+		db.exec("ALTER TABLE documents ADD COLUMN published_at INTEGER");
+	}
 	// Dedup guard: a given source can hold at most one document per external id.
 	// Manual uploads (external_id IS NULL) are unaffected by the partial index.
 	db.exec(

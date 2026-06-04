@@ -11,6 +11,8 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { usePromptSuggestions } from "@/hooks/use-prompt-suggestions";
 import { type Theme, useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./providers-section";
@@ -41,12 +43,21 @@ export function SettingsDialog({
 	initialTab = "general",
 }: SettingsDialogProps): React.JSX.Element {
 	const { theme, setTheme } = useTheme();
+	const { suggestions, setSuggestions, resetSuggestions } =
+		usePromptSuggestions();
 	const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+	const [suggestionsText, setSuggestionsText] = useState(() =>
+		suggestions.join("\n"),
+	);
 
 	// Honor the requested tab each time the dialog is opened.
 	useEffect(() => {
 		if (open) setActiveTab(initialTab);
 	}, [open, initialTab]);
+
+	useEffect(() => {
+		if (open) setSuggestionsText(suggestions.join("\n"));
+	}, [open, suggestions]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -110,6 +121,47 @@ export function SettingsDialog({
 														{option.label}
 													</button>
 												))}
+											</div>
+										</div>
+										<Separator />
+										<div className="space-y-3 py-4">
+											<div className="space-y-0.5">
+												<p className="text-sm font-medium">
+													Prompt suggestions
+												</p>
+												<p className="text-xs text-muted-foreground">
+													Edit the quick prompts shown around the chat input.
+													Add one prompt per line.
+												</p>
+											</div>
+											<Textarea
+												value={suggestionsText}
+												onChange={(event) =>
+													setSuggestionsText(event.target.value)
+												}
+												className="min-h-28 resize-y text-sm"
+												placeholder="What new information is in my brain from today?"
+											/>
+											<div className="flex justify-end gap-2">
+												<Button
+													variant="outline"
+													size="sm"
+													type="button"
+													onClick={() => {
+														resetSuggestions();
+													}}
+												>
+													Reset
+												</Button>
+												<Button
+													size="sm"
+													type="button"
+													onClick={() => {
+														setSuggestions(suggestionsText.split("\n"));
+													}}
+												>
+													Save suggestions
+												</Button>
 											</div>
 										</div>
 										<Separator />

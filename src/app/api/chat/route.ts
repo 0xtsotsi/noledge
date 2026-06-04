@@ -35,6 +35,8 @@ const bodySchema = z.object({
 	useRag: z.boolean().optional().default(true),
 	/** Enable the model's reasoning/thinking trace (only affects capable models). */
 	thinking: z.boolean().optional().default(true),
+	/** Browser IANA time zone used for dynamic date instructions. */
+	timeZone: z.string().min(1).optional().default("UTC"),
 });
 
 function errorStream(message: string): ReadableStream<Uint8Array> {
@@ -45,6 +47,12 @@ function errorStream(message: string): ReadableStream<Uint8Array> {
 			controller.close();
 		},
 	});
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error
+		? `Something went wrong: ${error.message}`
+		: "Something went wrong while generating a response.";
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -63,7 +71,7 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const { messages, model, useRag, thinking } = parsed.data;
+	const { messages, model, useRag, thinking, timeZone } = parsed.data;
 
 	const resolved = resolveModel(model, { thinking });
 	if (!resolved.ok) {
@@ -95,7 +103,7 @@ export async function POST(request: Request): Promise<Response> {
 			try {
 				const result = streamText({
 					model: resolved.model,
-					system: buildToolSystemPrompt(),
+					system: buildToolSystemPrompt(new Date(), timeZone),
 					messages: modelMessages,
 					tools: createKnowledgeTools(request.signal),
 					providerOptions: resolved.providerOptions,
@@ -147,6 +155,30 @@ export async function POST(request: Request): Promise<Response> {
 							emittedSources.add(source.id);
 							controller.enqueue(encodeChunk({ type: "source", source }));
 						}
+						continue;
+					}
+					if (part.type === "tool-error") {
+						controller.enqueue(
+							encodeChunk({ type: "text", text: errorMessage(part.error) }),
+						);
+						break;
+					}
+					if (part.type === "error") {
+						controller.enqueue(
+							encodeChunk({ type: "text", text: errorMessage(part.error) }),
+						);
+						break;
+					}
+					if (part.type === "finish-step" && part.finishReason === "length") {
+						controller.enqueue(
+							encodeChunk({
+								type: "text",
+								text: emittedText
+									? "\n\nThe model hit its output limit before finishing. Try asking for fewer sources or a narrower time window."
+									: "The model hit its output limit before it could answer. Try asking for fewer sources or a narrower time window.",
+							}),
+						);
+						break;
 					}
 				}
 
@@ -158,10 +190,7 @@ export async function POST(request: Request): Promise<Response> {
 					controller.enqueue(
 						encodeChunk({
 							type: "text",
-							text:
-								error instanceof Error
-									? `Something went wrong: ${error.message}`
-									: "Something went wrong while generating a response.",
+							text: errorMessage(error),
 						}),
 					);
 					controller.enqueue(encodeChunk({ type: "done" }));

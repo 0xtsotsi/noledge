@@ -1,3 +1,4 @@
+import type { SystemModelMessage } from "ai";
 import type { RetrievedChunk } from "@/lib/ai/rag/retrieve";
 
 const BASE_SYSTEM_PROMPT =
@@ -15,6 +16,16 @@ const ATTACHMENTS =
 	"- A block labelled `[Image attachment: … — this model cannot view images]` means only best-effort OCR " +
 	"text was recovered; treat it as imperfect and say so if it is unreadable rather than inventing content.";
 
+const MEMORY_MODEL =
+	"## Memory and context\n" +
+	"- The current chat history is included in the conversation, but it may be long and incomplete if the " +
+	"session is truncated by the provider. Do not assume older details unless they are present in the chat or " +
+	"retrieved from the brain.\n" +
+	"- The brain is long-term knowledge storage and is accessed only through searchKnowledge. Source chips are " +
+	"shown to the user automatically; they are not separate memory.\n" +
+	"- For recent/current questions, use the dynamic runtime context below for the user's local date/time and " +
+	"use searchKnowledge date filters when relevant.";
+
 const RETRIEVAL_STRATEGY =
 	"## Retrieving\n" +
 	"- Search the brain whenever the answer could depend on the user's own documents — which is most " +
@@ -23,6 +34,9 @@ const RETRIEVAL_STRATEGY =
 	"- Before searching on a follow-up, reformulate the query into a self-contained one using the " +
 	"conversation so far (resolve pronouns and implied subjects), since the search sees only the query " +
 	"string, not the chat history.\n" +
+	"- Use searchKnowledge dateFrom/dateTo when the user asks for time windows such as today, the last " +
+	"72 hours, this week, or before/after a date. Convert relative windows from the current date below " +
+	"into ISO 8601 bounds. The tool filters by source publication date when available, otherwise ingest date.\n" +
 	"- Break multi-part or comparative questions into several focused searches, one angle at a time, rather " +
 	"than one broad query. Try synonyms and alternate phrasings when a search comes back weak or empty.\n" +
 	"- Issue follow-up searches with refined queries until you have enough to answer well, but avoid " +
@@ -52,14 +66,47 @@ const FORMATTING =
 	"Answer in clear, well-structured Markdown. Be concise but complete — use lists, tables, or code blocks " +
 	"when they make the answer easier to follow, and match the user's language.";
 
-const TOOL_INSTRUCTION = `${ATTACHMENTS}\n\n${RETRIEVAL_STRATEGY}\n\n${GROUNDING}\n\n${FALLBACK}\n\n${FORMATTING}`;
+const TOOL_INSTRUCTION = `${ATTACHMENTS}\n\n${MEMORY_MODEL}\n\n${RETRIEVAL_STRATEGY}\n\n${GROUNDING}\n\n${FALLBACK}\n\n${FORMATTING}`;
+
+const STATIC_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${TOOL_INSTRUCTION}`;
+
+function formatRuntimeContext(now: Date, timeZone: string): string {
+	let localDateTime: string;
+	try {
+		localDateTime = new Intl.DateTimeFormat("en-GB", {
+			dateStyle: "full",
+			timeStyle: "long",
+			timeZone,
+		}).format(now);
+	} catch {
+		localDateTime = now.toISOString();
+	}
+	return (
+		"## Runtime context (not cached)\n" +
+		`- Current UTC time: ${now.toISOString()}\n` +
+		`- User time zone: ${timeZone}\n` +
+		`- User local date/time: ${localDateTime}`
+	);
+}
 
 /**
- * System prompt for the agentic tool path: the model retrieves on demand via
- * `searchKnowledge` rather than receiving pre-injected context.
+ * System prompt for the agentic tool path: static instructions are separated
+ * from dynamic runtime context so providers can cache only the stable prefix.
  */
-export function buildToolSystemPrompt(): string {
-	return `${BASE_SYSTEM_PROMPT}\n\n${TOOL_INSTRUCTION}`;
+export function buildToolSystemPrompt(
+	now: Date = new Date(),
+	timeZone = "UTC",
+): SystemModelMessage[] {
+	return [
+		{
+			role: "system",
+			content: STATIC_SYSTEM_PROMPT,
+			providerOptions: {
+				anthropic: { cacheControl: { type: "ephemeral" } },
+			},
+		},
+		{ role: "system", content: formatRuntimeContext(now, timeZone) },
+	];
 }
 
 /** Deduplicate retrieved chunks into source chips (one per document). */

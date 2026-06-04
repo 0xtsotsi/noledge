@@ -66,6 +66,16 @@ function parseDate(value: string): number | null {
 	return Number.isNaN(ms) ? null : ms;
 }
 
+function pdfHref(link: XmlNode): string | undefined {
+	for (const candidate of toArray(link)) {
+		if (!isObject(candidate)) continue;
+		const href = candidate["@_href"];
+		const type = candidate["@_type"];
+		if (typeof href === "string" && type === "application/pdf") return href;
+	}
+	return undefined;
+}
+
 /** Reduce an arXiv abstract URL (`http://arxiv.org/abs/2606.05158v1`) to its id. */
 function arxivIdFromUrl(idUrl: string): string {
 	const match = idUrl.match(/abs\/(.+)$/);
@@ -74,12 +84,14 @@ function arxivIdFromUrl(idUrl: string): string {
 
 function parseEntry(node: XmlObject): PaperItem {
 	const idUrl = textValue(node.id);
+	const externalId = arxivIdFromUrl(idUrl);
 	const link = alternateHref(node.link) || idUrl;
 	return {
-		externalId: arxivIdFromUrl(idUrl),
+		externalId,
 		title: normalizeText(textValue(node.title)),
 		abstract: normalizeText(textValue(node.summary)),
 		url: link,
+		pdfUrl: pdfHref(node.link) ?? `https://arxiv.org/pdf/${externalId}`,
 		publishedAt: parseDate(
 			textValue(node.published) || textValue(node.updated),
 		),

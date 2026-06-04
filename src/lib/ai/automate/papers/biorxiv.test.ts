@@ -40,6 +40,9 @@ describe("parseBiorxiv", () => {
 		expect(items[0]?.url).toBe(
 			"https://www.biorxiv.org/content/10.1101/2026.05.20.111111v2",
 		);
+		expect(items[0]?.pdfUrl).toBe(
+			"https://www.biorxiv.org/content/10.1101/2026.05.20.111111v2.full.pdf",
+		);
 		expect(items[1]?.externalId).toBe("10.1101/2026.05.25.727613");
 	});
 

@@ -266,6 +266,7 @@ describe("ingest + retrieve", () => {
 				sourceId: "src-1",
 				externalId: "guid-1",
 				sourceUrl: "https://example.com/cat",
+				publishedAt: 1_700_000_000_000,
 			},
 			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
 		);
@@ -273,16 +274,18 @@ describe("ingest + retrieve", () => {
 
 		const row = db
 			.prepare(
-				"SELECT source_id, external_id, source_url FROM documents WHERE source_id = ?",
+				"SELECT source_id, external_id, source_url, published_at FROM documents WHERE source_id = ?",
 			)
 			.get("src-1") as {
 			source_id: string;
 			external_id: string;
 			source_url: string;
+			published_at: number;
 		};
 		expect(row.source_id).toBe("src-1");
 		expect(row.external_id).toBe("guid-1");
 		expect(row.source_url).toBe("https://example.com/cat");
+		expect(row.published_at).toBe(1_700_000_000_000);
 	});
 
 	it("rejects a duplicate (source_id, external_id) via the unique index", async () => {
@@ -379,6 +382,54 @@ describe("ingest + retrieve", () => {
 		expect(auto.ok).toBe(true);
 		if (!auto.ok) return;
 		expect(auto.duplicate).toBe(false);
+	});
+
+	it("filters retrieval by source publication date", async () => {
+		db = openDatabase(":memory:");
+		const oldDoc = await ingestText(
+			{
+				text: "The cat sat on the old windowsill.",
+				title: "Old Cat",
+				filename: "old-cat",
+				mime: "text/plain",
+				bytes: 10,
+				sourceId: "src-1",
+				externalId: "old",
+				publishedAt: Date.parse("2026-06-01T12:00:00.000Z"),
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		const newDoc = await ingestText(
+			{
+				text: "The cat sat on the new windowsill.",
+				title: "New Cat",
+				filename: "new-cat",
+				mime: "text/plain",
+				bytes: 10,
+				sourceId: "src-1",
+				externalId: "new",
+				publishedAt: Date.parse("2026-06-05T12:00:00.000Z"),
+			},
+			{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+		);
+		expect(oldDoc.ok).toBe(true);
+		expect(newDoc.ok).toBe(true);
+
+		const retrieved = await retrieveChunks("cat windowsill", {
+			db,
+			embedder,
+			topK: 5,
+			dateFrom: Date.parse("2026-06-04T00:00:00.000Z"),
+			mmr: false,
+		});
+		expect(retrieved.ok).toBe(true);
+		if (!retrieved.ok) return;
+		expect(retrieved.chunks.map((chunk) => chunk.documentTitle)).toEqual([
+			"New Cat",
+		]);
+		expect(retrieved.chunks[0]?.documentPublishedAt).toBe(
+			Date.parse("2026-06-05T12:00:00.000Z"),
+		);
 	});
 
 	it("rejects a document with no extractable text", async () => {

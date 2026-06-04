@@ -10,6 +10,8 @@ const chunks: RetrievedChunk[] = [
 		content: "Cats sleep a lot.",
 		distance: 0.1,
 		score: 0.9,
+		documentCreatedAt: 1,
+		documentDate: 1,
 	},
 	{
 		chunkId: "c2",
@@ -18,18 +20,34 @@ const chunks: RetrievedChunk[] = [
 		content: "Cats purr when content.",
 		distance: 0.2,
 		score: 0.8,
+		documentCreatedAt: 1,
+		documentDate: 1,
 	},
 ];
 
 describe("buildToolSystemPrompt", () => {
 	it("never injects retrieved context", () => {
 		const prompt = buildToolSystemPrompt();
-		expect(prompt).not.toContain("<context>");
+		expect(prompt.map((message) => message.content).join("\n")).not.toContain(
+			"<context>",
+		);
 	});
 
-	it("instructs the model to use the searchKnowledge tool", () => {
-		const prompt = buildToolSystemPrompt();
-		expect(prompt).toContain("searchKnowledge");
+	it("separates cacheable instructions from dynamic runtime context", () => {
+		const prompt = buildToolSystemPrompt(
+			new Date("2026-06-05T00:00:00.000Z"),
+			"Europe/London",
+		);
+		expect(prompt).toHaveLength(2);
+		expect(prompt[0]?.content).toContain("searchKnowledge");
+		expect(prompt[0]?.content).toContain("Memory and context");
+		expect(prompt[0]?.providerOptions).toEqual({
+			anthropic: { cacheControl: { type: "ephemeral" } },
+		});
+		expect(prompt[1]?.content).toContain("Runtime context (not cached)");
+		expect(prompt[1]?.content).toContain("2026-06-05T00:00:00.000Z");
+		expect(prompt[1]?.content).toContain("Europe/London");
+		expect(prompt[1]?.providerOptions).toBeUndefined();
 	});
 });
 

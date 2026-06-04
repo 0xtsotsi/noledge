@@ -13,6 +13,13 @@ type KeywordRow = {
 	rank: number;
 };
 
+export type KeywordSearchOptions = {
+	/** Inclusive lower bound over published_at when known, otherwise created_at. */
+	dateFrom?: number;
+	/** Inclusive upper bound over published_at when known, otherwise created_at. */
+	dateTo?: number;
+};
+
 /**
  * Turn a free-text query into a safe FTS5 MATCH expression. Each whitespace token
  * is stripped of FTS syntax characters and wrapped in double quotes (a phrase),
@@ -39,6 +46,26 @@ function ftsAvailable(db: Database): boolean {
 	return row !== undefined;
 }
 
+function buildDateWhere(options: KeywordSearchOptions): {
+	clause: string;
+	params: number[];
+} {
+	const filters: string[] = [];
+	const params: number[] = [];
+	if (options.dateFrom !== undefined) {
+		filters.push("COALESCE(d.published_at, d.created_at) >= ?");
+		params.push(options.dateFrom);
+	}
+	if (options.dateTo !== undefined) {
+		filters.push("COALESCE(d.published_at, d.created_at) <= ?");
+		params.push(options.dateTo);
+	}
+	return {
+		clause: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+		params,
+	};
+}
+
 /**
  * Keyword-search chunks via the FTS5 index, ordered best-first by bm25 `rank`
  * (more negative = better). Returns up to `limit` hits.
@@ -51,6 +78,7 @@ export function keywordSearch(
 	db: Database,
 	query: string,
 	limit: number,
+	options: KeywordSearchOptions = {},
 ): KeywordHit[] {
 	if (limit <= 0) return [];
 	if (!ftsAvailable(db)) return [];
@@ -59,6 +87,7 @@ export function keywordSearch(
 	if (match === "") return [];
 
 	try {
+		const dateWhere = buildDateWhere(options);
 		const rows = db
 			.prepare(
 				`SELECT
@@ -67,11 +96,12 @@ export function keywordSearch(
 					f.rank  AS rank
 				FROM chunks_fts f
 				JOIN chunks c ON c.rowid = f.rowid
-				WHERE chunks_fts MATCH ?
+				JOIN documents d ON d.id = c.document_id
+				WHERE chunks_fts MATCH ?${dateWhere.clause}
 				ORDER BY f.rank
 				LIMIT ?`,
 			)
-			.all(match, limit) as KeywordRow[];
+			.all(match, ...dateWhere.params, limit) as KeywordRow[];
 
 		return rows.map((row) => ({
 			chunkId: row.chunk_id,

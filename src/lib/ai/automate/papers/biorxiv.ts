@@ -52,11 +52,13 @@ function mapItem(item: BiorxivItem, server: BiorxivServer): PaperItem {
 	const date = asString(item.date);
 	const ms = date.length > 0 ? Date.parse(date) : Number.NaN;
 	const host = server === "medrxiv" ? "www.medrxiv.org" : "www.biorxiv.org";
+	const url = doi.length > 0 ? `https://${host}/content/${doi}v${version}` : "";
 	return {
 		externalId: doi,
 		title: normalizeText(asString(item.title)),
 		abstract: normalizeText(asString(item.abstract)),
-		url: doi.length > 0 ? `https://${host}/content/${doi}v${version}` : "",
+		url,
+		...(url.length > 0 ? { pdfUrl: `${url}.full.pdf` } : {}),
 		publishedAt: Number.isNaN(ms) ? null : ms,
 	};
 }

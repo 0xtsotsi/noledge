@@ -42,13 +42,19 @@ export function reconstructAbstract(
 		.trim();
 }
 
+type OpenAlexLocation = {
+	landing_page_url?: unknown;
+	pdf_url?: unknown;
+};
+
 type OpenAlexWork = {
 	id?: unknown;
 	title?: unknown;
 	display_name?: unknown;
 	publication_date?: unknown;
 	abstract_inverted_index?: unknown;
-	primary_location?: { landing_page_url?: unknown } | null;
+	primary_location?: OpenAlexLocation | null;
+	best_oa_location?: OpenAlexLocation | null;
 };
 
 type OpenAlexResponse = {
@@ -72,7 +78,12 @@ function workId(idUrl: string): string {
 
 function mapWork(work: OpenAlexWork): PaperItem {
 	const idUrl = asString(work.id);
-	const landing = asString(work.primary_location?.landing_page_url);
+	const landing =
+		asString(work.best_oa_location?.landing_page_url) ||
+		asString(work.primary_location?.landing_page_url);
+	const pdfUrl =
+		asString(work.best_oa_location?.pdf_url) ||
+		asString(work.primary_location?.pdf_url);
 	const date = asString(work.publication_date);
 	const ms = date.length > 0 ? Date.parse(date) : Number.NaN;
 	return {
@@ -82,6 +93,7 @@ function mapWork(work: OpenAlexWork): PaperItem {
 			reconstructAbstract(asInvertedIndex(work.abstract_inverted_index)),
 		),
 		url: landing || idUrl,
+		...(pdfUrl.length > 0 ? { pdfUrl } : {}),
 		publishedAt: Number.isNaN(ms) ? null : ms,
 	};
 }

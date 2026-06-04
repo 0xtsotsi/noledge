@@ -41,6 +41,8 @@ export type IngestTextInput = {
 	sourceId?: string;
 	externalId?: string;
 	sourceUrl?: string;
+	/** Publication timestamp from the upstream source, when known. */
+	publishedAt?: number | null;
 };
 
 export type IngestResult =
@@ -142,7 +144,7 @@ export async function ingestText(
 	const title = input.title.trim() || input.filename;
 
 	const insertDocument = db.prepare(
-		"INSERT INTO documents (id, title, filename, mime, bytes, created_at, source_id, external_id, source_url, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO documents (id, title, filename, mime, bytes, created_at, source_id, external_id, source_url, content_hash, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 	);
 	const insertChunk = db.prepare(
 		"INSERT INTO chunks (id, document_id, ordinal, content, start, end) VALUES (?, ?, ?, ?, ?, ?)",
@@ -163,6 +165,7 @@ export async function ingestText(
 			input.externalId ?? null,
 			input.sourceUrl ?? null,
 			contentHash,
+			input.publishedAt ?? null,
 		);
 		chunks.forEach((chunk, ordinal) => {
 			const chunkId = randomUUID();

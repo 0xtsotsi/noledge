@@ -9,10 +9,16 @@ export type SearchKnowledgeOutput =
 
 export type KnowledgeTools = {
 	searchKnowledge: Tool<
-		{ query: string; topK?: number },
+		{ query: string; topK?: number; dateFrom?: string; dateTo?: string },
 		SearchKnowledgeOutput
 	>;
 };
+
+function parseDateBound(value: string | undefined): number | undefined {
+	if (value === undefined || value.trim().length === 0) return undefined;
+	const ms = Date.parse(value);
+	return Number.isNaN(ms) ? undefined : ms;
+}
 
 /**
  * Build the per-request knowledge-base tool set. Retrieval runs on demand when
@@ -44,11 +50,32 @@ export function createKnowledgeTools(signal: AbortSignal): KnowledgeTools {
 					.max(20)
 					.optional()
 					.describe("How many passages to retrieve. Defaults to 5."),
+				dateFrom: z
+					.string()
+					.optional()
+					.describe(
+						"Optional inclusive lower date bound as an ISO 8601 string. Filters by source publication date when available, otherwise ingest date.",
+					),
+				dateTo: z
+					.string()
+					.optional()
+					.describe(
+						"Optional inclusive upper date bound as an ISO 8601 string. Filters by source publication date when available, otherwise ingest date.",
+					),
 			}),
-			execute: async ({ query, topK }): Promise<SearchKnowledgeOutput> => {
+			execute: async ({
+				query,
+				topK,
+				dateFrom,
+				dateTo,
+			}): Promise<SearchKnowledgeOutput> => {
+				const parsedDateFrom = parseDateBound(dateFrom);
+				const parsedDateTo = parseDateBound(dateTo);
 				const retrieved = await retrieveChunks(query, {
 					signal,
 					topK: topK ?? 5,
+					...(parsedDateFrom !== undefined ? { dateFrom: parsedDateFrom } : {}),
+					...(parsedDateTo !== undefined ? { dateTo: parsedDateTo } : {}),
 				});
 				if (!retrieved.ok) {
 					return { ok: false, error: retrieved.error, chunks: [] };

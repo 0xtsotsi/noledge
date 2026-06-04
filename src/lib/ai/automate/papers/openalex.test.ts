@@ -32,6 +32,10 @@ const OPENALEX_SAMPLE = JSON.stringify({
 			primary_location: {
 				landing_page_url: "https://example.org/latent-diffusion",
 			},
+			best_oa_location: {
+				landing_page_url: "https://oa.example.org/latent-diffusion",
+				pdf_url: "https://oa.example.org/latent-diffusion.pdf",
+			},
 		},
 		{
 			id: "https://openalex.org/W999",
@@ -51,7 +55,8 @@ describe("parseOpenalex", () => {
 		const [first, second] = items;
 		expect(first?.externalId).toBe("W4312933868");
 		expect(first?.abstract).toBe("By decomposing images");
-		expect(first?.url).toBe("https://example.org/latent-diffusion");
+		expect(first?.url).toBe("https://oa.example.org/latent-diffusion");
+		expect(first?.pdfUrl).toBe("https://oa.example.org/latent-diffusion.pdf");
 		expect(first?.publishedAt).toBe(Date.parse("2022-06-01"));
 
 		// Missing abstract → empty string (poller/provider filters these out).

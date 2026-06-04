@@ -98,6 +98,22 @@ function pubDateMs(article: XmlObject): number | null {
 	return Number.isNaN(ms) ? null : ms;
 }
 
+function pmcPdfUrl(node: XmlObject): string | undefined {
+	const data = node.PubmedData;
+	if (!isObject(data)) return undefined;
+	const ids = isObject(data.ArticleIdList)
+		? data.ArticleIdList.ArticleId
+		: undefined;
+	for (const id of toArray(ids)) {
+		if (!isObject(id) || id["@_IdType"] !== "pmc") continue;
+		const pmcid = deepText(id).trim();
+		if (pmcid.length > 0) {
+			return `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/pdf/`;
+		}
+	}
+	return undefined;
+}
+
 function mapArticle(node: XmlObject): PaperItem | null {
 	const citation = node.MedlineCitation;
 	if (!isObject(citation)) return null;
@@ -105,11 +121,13 @@ function mapArticle(node: XmlObject): PaperItem | null {
 	if (pmid.length === 0) return null;
 	const article = citation.Article;
 	if (!isObject(article)) return null;
+	const pdfUrl = pmcPdfUrl(node);
 	return {
 		externalId: pmid,
 		title: normalizeText(deepText(article.ArticleTitle)),
 		abstract: normalizeText(abstractText(article)),
 		url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
+		...(pdfUrl ? { pdfUrl } : {}),
 		publishedAt: pubDateMs(article),
 	};
 }

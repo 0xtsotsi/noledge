@@ -20,6 +20,12 @@ export type RetrievedChunk = {
 	start?: number;
 	/** Char offset of the chunk's end in the source document, if recorded. */
 	end?: number;
+	/** When this document was ingested into the knowledge base. */
+	documentCreatedAt: number;
+	/** Publication timestamp from the upstream source, when available. */
+	documentPublishedAt?: number;
+	/** Date used for filtering/sorting semantics: publishedAt when known, else createdAt. */
+	documentDate: number;
 };
 
 export type RetrieveResult =
@@ -51,6 +57,10 @@ export type RetrieveOptions = {
 	mmr?: boolean;
 	/** Final reordering pass. Defaults to a no-op identity reranker. */
 	reranker?: Reranker;
+	/** Inclusive lower bound over published_at when known, otherwise created_at. */
+	dateFrom?: number;
+	/** Inclusive upper bound over published_at when known, otherwise created_at. */
+	dateTo?: number;
 	signal?: AbortSignal;
 };
 
@@ -67,6 +77,9 @@ type VectorRow = {
 	distance: number;
 	start: number | null;
 	end: number | null;
+	created_at: number;
+	published_at: number | null;
+	document_date: number;
 };
 
 type ChunkRow = {
@@ -76,6 +89,9 @@ type ChunkRow = {
 	content: string;
 	start: number | null;
 	end: number | null;
+	created_at: number;
+	published_at: number | null;
+	document_date: number;
 };
 
 type Candidate = {
@@ -86,6 +102,9 @@ type Candidate = {
 	distance: number;
 	start: number | null;
 	end: number | null;
+	createdAt: number;
+	publishedAt: number | null;
+	documentDate: number;
 	vScore: number;
 	tScore: number;
 };
@@ -99,6 +118,26 @@ function clamp01(value: number): number {
 /** Candidate overfetch per arm so filtering/MMR never under-fills `topK`. */
 function candidateCount(topK: number): number {
 	return Math.max(topK * 3, topK + 8);
+}
+
+function buildDateWhere(options: RetrieveOptions): {
+	clause: string;
+	params: number[];
+} {
+	const filters: string[] = [];
+	const params: number[] = [];
+	if (options.dateFrom !== undefined) {
+		filters.push("COALESCE(d.published_at, d.created_at) >= ?");
+		params.push(options.dateFrom);
+	}
+	if (options.dateTo !== undefined) {
+		filters.push("COALESCE(d.published_at, d.created_at) <= ?");
+		params.push(options.dateTo);
+	}
+	return {
+		clause: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+		params,
+	};
 }
 
 /**
@@ -143,6 +182,7 @@ export async function retrieveChunks(
 	if (!queryVector) return { ok: true, chunks: [] };
 
 	const candidateK = candidateCount(topK);
+	const dateWhere = buildDateWhere(options);
 
 	try {
 		const candidates = new Map<string, Candidate>();
@@ -154,17 +194,24 @@ export async function retrieveChunks(
 					v.chunk_id    AS chunk_id,
 					c.document_id AS document_id,
 					d.title       AS document_title,
-					c.content     AS content,
-					v.distance    AS distance,
-					c.start       AS start,
-					c.end         AS end
+					c.content                         AS content,
+					v.distance                        AS distance,
+					c.start                           AS start,
+					c.end                             AS end,
+					d.created_at                      AS created_at,
+					d.published_at                    AS published_at,
+					COALESCE(d.published_at, d.created_at) AS document_date
 				FROM vec_chunks v
 				JOIN chunks c ON c.id = v.chunk_id
 				JOIN documents d ON d.id = c.document_id
-				WHERE v.embedding MATCH ? AND k = ?
+				WHERE v.embedding MATCH ? AND k = ?${dateWhere.clause}
 				ORDER BY v.distance`,
 			)
-			.all(toVectorBlob(queryVector), candidateK) as VectorRow[];
+			.all(
+				toVectorBlob(queryVector),
+				candidateK,
+				...dateWhere.params,
+			) as VectorRow[];
 
 		for (const row of vectorRows) {
 			candidates.set(row.chunk_id, {
@@ -175,6 +222,9 @@ export async function retrieveChunks(
 				distance: row.distance,
 				start: row.start,
 				end: row.end,
+				createdAt: row.created_at,
+				publishedAt: row.published_at,
+				documentDate: row.document_date,
 				vScore: clamp01(1 - row.distance),
 				tScore: 0,
 			});
@@ -182,7 +232,12 @@ export async function retrieveChunks(
 
 		// Keyword arm: FTS5 overfetch → min-max normalized rank → tScore.
 		if (hybrid) {
-			const hits = keywordSearch(db, trimmed, candidateK);
+			const hits = keywordSearch(db, trimmed, candidateK, {
+				...(options.dateFrom !== undefined
+					? { dateFrom: options.dateFrom }
+					: {}),
+				...(options.dateTo !== undefined ? { dateTo: options.dateTo } : {}),
+			});
 			if (hits.length > 0) {
 				const ranks = hits.map((hit) => hit.rank);
 				const minRank = Math.min(...ranks);
@@ -194,12 +249,15 @@ export async function retrieveChunks(
 						c.id          AS id,
 						c.document_id AS document_id,
 						d.title       AS document_title,
-						c.content     AS content,
-						c.start       AS start,
-						c.end         AS end
+						c.content                         AS content,
+						c.start                           AS start,
+						c.end                             AS end,
+						d.created_at                      AS created_at,
+						d.published_at                    AS published_at,
+						COALESCE(d.published_at, d.created_at) AS document_date
 					FROM chunks c
 					JOIN documents d ON d.id = c.document_id
-					WHERE c.id = ?`,
+					WHERE c.id = ?${dateWhere.clause}`,
 				);
 
 				for (const hit of hits) {
@@ -210,7 +268,9 @@ export async function retrieveChunks(
 						existing.tScore = tScore;
 						continue;
 					}
-					const row = getChunk.get(hit.chunkId) as ChunkRow | undefined;
+					const row = getChunk.get(hit.chunkId, ...dateWhere.params) as
+						| ChunkRow
+						| undefined;
 					if (!row) continue;
 					candidates.set(hit.chunkId, {
 						chunkId: row.id,
@@ -220,6 +280,9 @@ export async function retrieveChunks(
 						distance: Number.POSITIVE_INFINITY,
 						start: row.start,
 						end: row.end,
+						createdAt: row.created_at,
+						publishedAt: row.published_at,
+						documentDate: row.document_date,
 						vScore: 0,
 						tScore,
 					});
@@ -259,6 +322,11 @@ export async function retrieveChunks(
 				? { start: entry.candidate.start }
 				: {}),
 			...(entry.candidate.end !== null ? { end: entry.candidate.end } : {}),
+			documentCreatedAt: entry.candidate.createdAt,
+			...(entry.candidate.publishedAt !== null
+				? { documentPublishedAt: entry.candidate.publishedAt }
+				: {}),
+			documentDate: entry.candidate.documentDate,
 		}));
 
 		const reranked = await reranker(trimmed, chunks, options.signal);

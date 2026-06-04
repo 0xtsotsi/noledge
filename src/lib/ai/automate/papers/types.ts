@@ -25,6 +25,8 @@ export type PaperItem = {
 	abstract: string;
 	/** Landing page for display. */
 	url: string;
+	/** Direct PDF/full-text URL, when the provider exposes one. */
+	pdfUrl?: string;
 	/** Publication time in epoch ms, when known. */
 	publishedAt: number | null;
 };

@@ -19,6 +19,7 @@ import {
 	PromptInputActions,
 	PromptInputTextarea,
 } from "@/components/prompt-kit/prompt-input";
+import { PromptSuggestion } from "@/components/prompt-kit/prompt-suggestion";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ModelPicker } from "./model-picker";
@@ -42,6 +43,7 @@ type ChatInputBarProps = {
 	onThinkingChange: (value: boolean) => void;
 	/** Whether the selected model supports a reasoning trace. */
 	thinkingSupported: boolean;
+	suggestions: string[];
 };
 
 export function ChatInputBar({
@@ -58,12 +60,28 @@ export function ChatInputBar({
 	thinking,
 	onThinkingChange,
 	thinkingSupported,
+	suggestions,
 }: ChatInputBarProps): React.JSX.Element {
 	const isBusy = status === "submitting" || status === "streaming";
 	const canSend = value.trim().length > 0 || attachments.length > 0;
 
 	return (
 		<FileUpload onFilesAdded={onFilesAdded} accept={UPLOAD_ACCEPT}>
+			{suggestions.length > 0 ? (
+				<div className="mb-3 flex flex-wrap justify-center gap-2">
+					{suggestions.map((suggestion) => (
+						<PromptSuggestion
+							key={suggestion}
+							type="button"
+							size="sm"
+							className="h-auto max-w-full px-2.5 py-1.5 text-left text-[11px] sm:text-xs"
+							onClick={() => onValueChange(suggestion)}
+						>
+							{suggestion}
+						</PromptSuggestion>
+					))}
+				</div>
+			) : null}
 			<PromptInput
 				value={value}
 				onValueChange={onValueChange}

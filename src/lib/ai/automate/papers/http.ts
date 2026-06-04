@@ -13,6 +13,12 @@ export type HttpTextResult =
 	| { ok: true; status: number; body: string }
 	| { ok: false; error: string };
 
+export type HttpBinaryResult =
+	| { ok: true; status: number; body: Buffer; mime: string }
+	| { ok: false; error: string };
+
+const MAX_BINARY_BYTES = 40 * 1024 * 1024;
+
 /** Fetch a URL as text. Network/timeout failures return a `Result`. */
 export async function httpText(
 	url: string,
@@ -36,6 +42,54 @@ export async function httpText(
 		});
 		const body = await response.text();
 		return { ok: true, status: response.status, body };
+	} catch (error) {
+		if (error instanceof DOMException && error.name === "AbortError") {
+			return { ok: false, error: "Request timed out." };
+		}
+		return {
+			ok: false,
+			error: error instanceof Error ? error.message : "Request failed.",
+		};
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Fetch a URL as bytes with a size cap. Network/timeout failures return a `Result`. */
+export async function httpBinary(
+	url: string,
+	options: { accept?: string; signal?: AbortSignal } = {},
+): Promise<HttpBinaryResult> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+	if (options.signal) {
+		options.signal.addEventListener("abort", () => controller.abort(), {
+			once: true,
+		});
+	}
+	try {
+		const response = await fetch(url, {
+			headers: {
+				Accept: options.accept ?? "application/pdf, application/octet-stream",
+				"User-Agent": USER_AGENT,
+			},
+			redirect: "follow",
+			signal: controller.signal,
+		});
+		const length = response.headers.get("content-length");
+		if (length && Number(length) > MAX_BINARY_BYTES) {
+			return { ok: false, error: "File exceeds the size limit." };
+		}
+		const body = Buffer.from(await response.arrayBuffer());
+		if (body.byteLength > MAX_BINARY_BYTES) {
+			return { ok: false, error: "File exceeds the size limit." };
+		}
+		return {
+			ok: true,
+			status: response.status,
+			body,
+			mime: response.headers.get("content-type") ?? "application/octet-stream",
+		};
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
 			return { ok: false, error: "Request timed out." };
