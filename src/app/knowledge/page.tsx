@@ -2,8 +2,10 @@
 
 import type { Icon } from "@phosphor-icons/react";
 import {
+	CaretDown,
 	CaretLeft,
 	CaretRight,
+	CaretUp,
 	CircleNotch,
 	FileImage,
 	FilePdf,
@@ -17,6 +19,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import { UploadDialog } from "@/components/knowledge/upload-dialog";
 import { Button } from "@/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 type DocumentItem = {
 	id: string;
@@ -29,6 +40,31 @@ type DocumentItem = {
 	sourceId: string | null;
 	sourceUrl: string | null;
 };
+
+type DocumentTypeFilter =
+	| "all"
+	| "article"
+	| "video"
+	| "paper"
+	| "pdf"
+	| "image"
+	| "spreadsheet"
+	| "text";
+
+type DocumentSortKey = "name" | "type" | "chunks" | "size" | "added";
+type DocumentSortDirection = "asc" | "desc";
+
+type KnowledgeSort = {
+	key: DocumentSortKey;
+	direction: DocumentSortDirection;
+};
+
+type TypeFilterOption = {
+	value: DocumentTypeFilter;
+	label: string;
+};
+
+type DocumentTypeCounts = Record<DocumentTypeFilter, number>;
 
 function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -80,6 +116,89 @@ function iconFor(doc: DocumentItem): Icon {
 
 const PAGE_SIZE = 25;
 
+const TYPE_FILTER_OPTIONS = [
+	{ value: "all", label: "All types" },
+	{ value: "article", label: "Articles" },
+	{ value: "video", label: "Videos" },
+	{ value: "paper", label: "Papers" },
+	{ value: "pdf", label: "PDFs" },
+	{ value: "image", label: "Images" },
+	{ value: "spreadsheet", label: "Spreadsheets" },
+	{ value: "text", label: "Text & docs" },
+] satisfies TypeFilterOption[];
+
+const EMPTY_TYPE_COUNTS = Object.fromEntries(
+	TYPE_FILTER_OPTIONS.map((option) => [option.value, 0]),
+) as DocumentTypeCounts;
+
+function typeFilterLabel(value: DocumentTypeFilter): string {
+	return (
+		TYPE_FILTER_OPTIONS.find((option) => option.value === value)?.label ??
+		"All types"
+	);
+}
+
+function defaultDirectionFor(key: DocumentSortKey): DocumentSortDirection {
+	if (key === "chunks" || key === "size") return "desc";
+	return "asc";
+}
+
+function nextSortFor(
+	current: KnowledgeSort,
+	key: DocumentSortKey,
+): KnowledgeSort {
+	if (current.key !== key) {
+		return { key, direction: defaultDirectionFor(key) };
+	}
+	return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+}
+
+type SortHeaderProps = {
+	label: string;
+	sortKey: DocumentSortKey;
+	current: KnowledgeSort;
+	onSort: (key: DocumentSortKey) => void;
+	align?: "left" | "right";
+	className?: string;
+};
+
+function SortHeader({
+	label,
+	sortKey,
+	current,
+	onSort,
+	align = "left",
+	className,
+}: SortHeaderProps): React.JSX.Element {
+	const active = current.key === sortKey;
+	const Icon = active && current.direction === "asc" ? CaretUp : CaretDown;
+	return (
+		<th
+			className={cn("px-4 py-2.5 font-medium", className)}
+			aria-sort={
+				active
+					? current.direction === "asc"
+						? "ascending"
+						: "descending"
+					: "none"
+			}
+		>
+			<button
+				type="button"
+				className={cn(
+					"inline-flex items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+					align === "right" && "float-right",
+					active && "text-foreground",
+				)}
+				onClick={() => onSort(sortKey)}
+			>
+				{label}
+				<Icon className={cn("size-3.5", !active && "opacity-45")} />
+			</button>
+		</th>
+	);
+}
+
 export default function KnowledgePage(): React.JSX.Element {
 	const [documents, setDocuments] = useState<DocumentItem[]>([]);
 	const [total, setTotal] = useState(0);
@@ -87,27 +206,45 @@ export default function KnowledgePage(): React.JSX.Element {
 	const [loading, setLoading] = useState(true);
 	const [deleting, setDeleting] = useState<string | null>(null);
 	const [uploadOpen, setUploadOpen] = useState(false);
+	const [typeFilter, setTypeFilter] = useState<DocumentTypeFilter>("all");
+	const [typeCounts, setTypeCounts] =
+		useState<DocumentTypeCounts>(EMPTY_TYPE_COUNTS);
+	const [sort, setSort] = useState<KnowledgeSort>({
+		key: "added",
+		direction: "desc",
+	});
 
-	const load = useCallback(async (pageIndex: number): Promise<void> => {
-		setLoading(true);
-		try {
-			const offset = pageIndex * PAGE_SIZE;
-			const response = await fetch(
-				`/api/documents?limit=${PAGE_SIZE}&offset=${offset}`,
-			);
-			const data = (await response.json()) as {
-				documents: DocumentItem[];
-				total: number;
-			};
-			setDocuments(data.documents);
-			setTotal(data.total);
-		} catch {
-			setDocuments([]);
-			setTotal(0);
-		} finally {
-			setLoading(false);
-		}
-	}, []);
+	const load = useCallback(
+		async (pageIndex: number): Promise<void> => {
+			setLoading(true);
+			try {
+				const offset = pageIndex * PAGE_SIZE;
+				const params = new URLSearchParams({
+					limit: String(PAGE_SIZE),
+					offset: String(offset),
+					type: typeFilter,
+					sort: sort.key,
+					direction: sort.direction,
+				});
+				const response = await fetch(`/api/documents?${params.toString()}`);
+				const data = (await response.json()) as {
+					documents: DocumentItem[];
+					total: number;
+					counts: DocumentTypeCounts;
+				};
+				setDocuments(data.documents);
+				setTotal(data.total);
+				setTypeCounts(data.counts);
+			} catch {
+				setDocuments([]);
+				setTotal(0);
+				setTypeCounts(EMPTY_TYPE_COUNTS);
+			} finally {
+				setLoading(false);
+			}
+		},
+		[sort.direction, sort.key, typeFilter],
+	);
 
 	useEffect(() => {
 		void load(page);
@@ -134,7 +271,19 @@ export default function KnowledgePage(): React.JSX.Element {
 		[load, page, total],
 	);
 
+	const updateTypeFilter = useCallback((value: string): void => {
+		setTypeFilter(value as DocumentTypeFilter);
+		setPage(0);
+	}, []);
+
+	const updateSort = useCallback((key: DocumentSortKey): void => {
+		setSort((current) => nextSortFor(current, key));
+		setPage(0);
+	}, []);
+
+	const selectedTypeCount = typeCounts[typeFilter];
 	const isEmpty = !loading && total === 0;
+	const hasActiveFilter = typeFilter !== "all";
 	const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 	const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
 	const rangeEnd = Math.min(page * PAGE_SIZE + documents.length, total);
@@ -145,13 +294,48 @@ export default function KnowledgePage(): React.JSX.Element {
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">Knowledge</h1>
 					<p className="text-sm text-muted-foreground">
-						Documents you have taught noledge.
+						The tasty stash of stuff Noledge has learned from.
 					</p>
 				</div>
-				<Button onClick={() => setUploadOpen(true)} className="shrink-0">
-					<Upload className="size-4" />
-					Upload
-				</Button>
+				<div className="flex shrink-0 items-center gap-2">
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button variant="outline" className="min-w-40 justify-between">
+								<span>{typeFilterLabel(typeFilter)}</span>
+								<span className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground tabular-nums">
+									{selectedTypeCount}
+								</span>
+								<CaretDown className="size-4" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end" className="min-w-48">
+							<DropdownMenuLabel>Filter by type</DropdownMenuLabel>
+							<DropdownMenuRadioGroup
+								value={typeFilter}
+								onValueChange={updateTypeFilter}
+							>
+								{TYPE_FILTER_OPTIONS.map((option) => (
+									<DropdownMenuRadioItem
+										key={option.value}
+										value={option.value}
+										showIndicator={false}
+										className="justify-between data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground"
+									>
+										<span>{option.label}</span>
+										<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground tabular-nums">
+											{typeCounts[option.value]}
+										</span>
+									</DropdownMenuRadioItem>
+								))}
+							</DropdownMenuRadioGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
+
+					<Button onClick={() => setUploadOpen(true)}>
+						<Upload className="size-4" />
+						Upload
+					</Button>
+				</div>
 			</div>
 
 			{loading ? (
@@ -160,9 +344,13 @@ export default function KnowledgePage(): React.JSX.Element {
 				</div>
 			) : isEmpty ? (
 				<div className="flex flex-1 flex-col items-center justify-center gap-1 py-16 text-center">
-					<p className="text-sm font-medium">No knowledge yet</p>
+					<p className="text-sm font-medium">
+						{hasActiveFilter ? "No matching knowledge" : "No knowledge yet"}
+					</p>
 					<p className="text-xs text-muted-foreground">
-						Upload documents — PDF, Office, text, and images (OCR)
+						{hasActiveFilter
+							? "Try another type filter or upload a matching document."
+							: "Upload documents — PDF, Office, text, and images (OCR)"}
 					</p>
 				</div>
 			) : (
@@ -170,15 +358,42 @@ export default function KnowledgePage(): React.JSX.Element {
 					<table className="w-full table-fixed text-sm">
 						<thead>
 							<tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
-								<th className="px-4 py-2.5 font-medium">Name</th>
-								<th className="w-24 px-4 py-2.5 font-medium">Type</th>
-								<th className="w-20 px-4 py-2.5 text-right font-medium">
-									Chunks
-								</th>
-								<th className="w-24 px-4 py-2.5 text-right font-medium">
-									Size
-								</th>
-								<th className="w-32 px-4 py-2.5 font-medium">Added</th>
+								<SortHeader
+									label="Name"
+									sortKey="name"
+									current={sort}
+									onSort={updateSort}
+								/>
+								<SortHeader
+									label="Type"
+									sortKey="type"
+									current={sort}
+									onSort={updateSort}
+									className="w-24"
+								/>
+								<SortHeader
+									label="Chunks"
+									sortKey="chunks"
+									current={sort}
+									onSort={updateSort}
+									align="right"
+									className="w-24 text-right"
+								/>
+								<SortHeader
+									label="Size"
+									sortKey="size"
+									current={sort}
+									onSort={updateSort}
+									align="right"
+									className="w-24 text-right"
+								/>
+								<SortHeader
+									label="Added"
+									sortKey="added"
+									current={sort}
+									onSort={updateSort}
+									className="w-32"
+								/>
 								<th className="w-12 px-4 py-2.5" />
 							</tr>
 						</thead>

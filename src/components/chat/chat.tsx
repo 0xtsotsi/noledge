@@ -493,7 +493,7 @@ export function Chat(): React.JSX.Element {
 					) : (
 						<>
 							<h1 className="text-center text-3xl font-semibold tracking-tight">
-								What can I help with?
+								Ask your brain anything
 							</h1>
 							<ChatInputBar
 								value={input}

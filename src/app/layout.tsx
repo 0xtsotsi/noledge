@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/sidebar/app-shell";
+import { siteMetadata, siteViewport } from "@/lib/seo";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,10 +14,9 @@ const geistMono = Geist_Mono({
 	subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-	title: "noledge",
-	description: "noledge",
-};
+export const metadata: Metadata = siteMetadata;
+
+export const viewport: Viewport = siteViewport;
 
 const themeScript = `(function(){try{var t=localStorage.getItem("noledge-theme");var d=t==="dark"||((!t||t==="system")&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",d);}catch(e){}})();`;
 

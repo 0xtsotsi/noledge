@@ -63,7 +63,7 @@ export default function AutomatePage(): React.JSX.Element {
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">Automate</h1>
 					<p className="text-sm text-muted-foreground">
-						Grow your knowledge base automatically from blogs and YouTube.
+						Blogs, videos, and papers hop into your brain while you chill.
 					</p>
 				</div>
 				<div className="flex flex-col items-center gap-1">

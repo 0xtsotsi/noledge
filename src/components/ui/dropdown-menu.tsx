@@ -60,24 +60,28 @@ function DropdownMenuRadioGroup(
 function DropdownMenuRadioItem({
 	className,
 	children,
+	showIndicator = true,
 	...props
-}: React.ComponentProps<
-	typeof DropdownMenuPrimitive.RadioItem
->): React.JSX.Element {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & {
+	showIndicator?: boolean;
+}): React.JSX.Element {
 	return (
 		<DropdownMenuPrimitive.RadioItem
 			data-slot="dropdown-menu-radio-item"
 			className={cn(
-				"relative flex cursor-default select-none items-center gap-2 rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				"relative flex cursor-default select-none items-center gap-2 rounded-sm py-1.5 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				showIndicator ? "pl-8" : "pl-2",
 				className,
 			)}
 			{...props}
 		>
-			<span className="absolute left-2 flex size-3.5 items-center justify-center">
-				<DropdownMenuPrimitive.ItemIndicator>
-					<Check className="size-4" />
-				</DropdownMenuPrimitive.ItemIndicator>
-			</span>
+			{showIndicator ? (
+				<span className="absolute left-2 flex size-3.5 items-center justify-center">
+					<DropdownMenuPrimitive.ItemIndicator>
+						<Check className="size-4" />
+					</DropdownMenuPrimitive.ItemIndicator>
+				</span>
+			) : null}
 			{children}
 		</DropdownMenuPrimitive.RadioItem>
 	);

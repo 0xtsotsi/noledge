@@ -32,6 +32,8 @@ type Json3Response = {
 	events?: { segs?: { utf8?: string }[] }[];
 };
 
+type VideoInfo = Awaited<ReturnType<Innertube["getInfo"]>>;
+
 /** Pick the best caption track: prefer the requested language, else any. */
 function pickTrack(
 	tracks: CaptionTrack[],
@@ -49,19 +51,78 @@ function pickTrack(
 	return prefix ?? withUrl[0];
 }
 
+function normalizeTranscriptLine(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
+}
+
 /** Flatten a json3 caption document into plain transcript text. */
 function json3ToText(doc: Json3Response): string {
 	const lines: string[] = [];
 	for (const event of doc.events ?? []) {
 		if (!event.segs) continue;
-		const line = event.segs
-			.map((seg) => seg.utf8 ?? "")
-			.join("")
-			.replace(/\s+/g, " ")
-			.trim();
+		const line = normalizeTranscriptLine(
+			event.segs.map((seg) => seg.utf8 ?? "").join(""),
+		);
 		if (line.length > 0) lines.push(line);
 	}
 	return lines.join("\n");
+}
+
+function languageAliases(language: string): string[] {
+	if (language === "en") return ["english", "english (auto-generated)"];
+	return [language];
+}
+
+async function fetchInnerTubeTranscript(
+	info: VideoInfo,
+	language: string,
+): Promise<TranscriptResult> {
+	try {
+		let transcriptInfo = await info.getTranscript();
+		const languageItems =
+			transcriptInfo.transcript?.content?.footer?.language_menu
+				?.sub_menu_items ?? [];
+		const aliases = languageAliases(language);
+		const selectedLanguage = languageItems.find((item) => {
+			const title = item.title.toString().toLowerCase();
+			return aliases.some(
+				(alias) => title === alias || title.startsWith(`${alias} `),
+			);
+		});
+
+		if (
+			selectedLanguage &&
+			!selectedLanguage.selected &&
+			transcriptInfo.selectLanguage
+		) {
+			transcriptInfo = await transcriptInfo.selectLanguage(
+				selectedLanguage.title.toString(),
+			);
+		}
+
+		const segments =
+			transcriptInfo.transcript?.content?.body?.initial_segments ?? [];
+		const text = segments
+			.map((segment) =>
+				normalizeTranscriptLine(segment.snippet?.toString() ?? ""),
+			)
+			.filter((line) => line.length > 0)
+			.join("\n");
+
+		if (text.trim().length === 0) {
+			return { ok: false, skipped: true, reason: "Transcript was empty." };
+		}
+		return { ok: true, text };
+	} catch (error) {
+		return {
+			ok: false,
+			skipped: true,
+			reason:
+				error instanceof Error
+					? `InnerTube transcript fallback failed: ${error.message}`
+					: "InnerTube transcript fallback failed.",
+		};
+	}
 }
 
 /**
@@ -89,10 +150,11 @@ export async function fetchTranscript(
 		};
 	}
 
+	let info: VideoInfo;
 	let tracks: CaptionTrack[];
 	try {
-		const info = await yt.getInfo(videoId);
-		tracks = (info.captions?.caption_tracks ?? []) as CaptionTrack[];
+		info = await yt.getInfo(videoId);
+		tracks = info.captions?.caption_tracks ?? [];
 	} catch (error) {
 		return {
 			ok: false,
@@ -106,11 +168,7 @@ export async function fetchTranscript(
 
 	const track = pickTrack(tracks, language);
 	if (!track) {
-		return {
-			ok: false,
-			skipped: true,
-			reason: "No captions available for this video.",
-		};
+		return fetchInnerTubeTranscript(info, language);
 	}
 
 	// Append fmt=json3 for structured caption events.
@@ -119,36 +177,50 @@ export async function fetchTranscript(
 		: `${track.base_url}&fmt=json3`;
 
 	try {
-		const response = await fetch(url);
+		const response = await fetch(url, {
+			headers: {
+				Accept: "application/json,text/plain,*/*",
+				"User-Agent":
+					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+			},
+		});
 		if (!response.ok) {
+			const fallback = await fetchInnerTubeTranscript(info, language);
+			if (fallback.ok) return fallback;
 			return {
 				ok: false,
 				skipped: true,
-				reason: `Caption track returned ${response.status}.`,
+				reason: `Caption track returned ${response.status}; ${fallback.reason}`,
 			};
 		}
 		const body = await response.text();
 		if (body.trim().length === 0) {
+			const fallback = await fetchInnerTubeTranscript(info, language);
+			if (fallback.ok) return fallback;
 			// Empty body is the classic PO-token / IP-block symptom.
 			return {
 				ok: false,
 				skipped: true,
-				reason: "Caption track returned empty (likely blocked or gated).",
+				reason: `Caption track returned empty (likely blocked or gated); ${fallback.reason}`,
 			};
 		}
 		const text = json3ToText(JSON.parse(body) as Json3Response);
 		if (text.trim().length === 0) {
-			return { ok: false, skipped: true, reason: "Transcript was empty." };
+			const fallback = await fetchInnerTubeTranscript(info, language);
+			if (fallback.ok) return fallback;
+			return { ok: false, skipped: true, reason: fallback.reason };
 		}
 		return { ok: true, text };
 	} catch (error) {
+		const fallback = await fetchInnerTubeTranscript(info, language);
+		if (fallback.ok) return fallback;
 		return {
 			ok: false,
 			skipped: true,
 			reason:
 				error instanceof Error
-					? `Caption fetch failed: ${error.message}`
-					: "Caption fetch failed.",
+					? `Caption fetch failed: ${error.message}; ${fallback.reason}`
+					: `Caption fetch failed; ${fallback.reason}`,
 		};
 	}
 }

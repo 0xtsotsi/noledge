@@ -48,7 +48,7 @@ export function BrainView(): React.JSX.Element {
 					The Brain is empty
 				</p>
 				<p className="text-xs text-muted-foreground">
-					Upload documents in Knowledge to grow its connections.
+					Upload docs in Knowledge and the idea-web will wake up.
 				</p>
 			</div>
 		);
@@ -61,7 +61,7 @@ export function BrainView(): React.JSX.Element {
 					The Brain
 				</h1>
 				<p className="text-xs text-muted-foreground">
-					{graph.nodes.length} fragments · {graph.links.length} connections ·{" "}
+					{graph.nodes.length} idea sparks · {graph.links.length} links ·{" "}
 					{graph.documentCount} source
 					{graph.documentCount === 1 ? "" : "s"}
 				</p>

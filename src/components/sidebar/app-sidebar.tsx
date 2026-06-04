@@ -84,7 +84,7 @@ export function AppSidebar(): React.JSX.Element {
 			<SidebarHeader>
 				<div className="flex items-center justify-between gap-2">
 					<span className="logo-shimmer px-1 text-base font-semibold group-data-[collapsible=icon]:hidden">
-						noledge
+						Noledge
 					</span>
 					<SidebarTrigger />
 				</div>
