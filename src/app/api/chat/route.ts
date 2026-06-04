@@ -1,5 +1,6 @@
-import { type ModelMessage, stepCountIs, streamText } from "ai";
+import { stepCountIs, streamText } from "ai";
 import { z } from "zod";
+import { buildModelMessages } from "@/lib/ai/chat/attachments";
 import { buildToolSystemPrompt, toSources } from "@/lib/ai/chat/prompt";
 import { type ChatStreamChunk, encodeChunk } from "@/lib/ai/chat/sse";
 import { createKnowledgeTools } from "@/lib/ai/chat/tools";
@@ -10,10 +11,22 @@ const textPartSchema = z.object({
 	text: z.string(),
 });
 
+const filePartSchema = z.object({
+	type: z.literal("file"),
+	name: z.string(),
+	mediaType: z.string(),
+	data: z.string(),
+});
+
+const partSchema = z.discriminatedUnion("type", [
+	textPartSchema,
+	filePartSchema,
+]);
+
 const messageSchema = z.object({
 	id: z.string(),
 	role: z.enum(["user", "assistant", "system"]),
-	parts: z.array(textPartSchema),
+	parts: z.array(partSchema),
 });
 
 const bodySchema = z.object({
@@ -23,22 +36,6 @@ const bodySchema = z.object({
 	/** Enable the model's reasoning/thinking trace (only affects capable models). */
 	thinking: z.boolean().optional().default(true),
 });
-
-function partsToText(parts: { text: string }[]): string {
-	return parts
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
-}
-
-function toModelMessages(
-	messages: z.infer<typeof bodySchema>["messages"],
-): ModelMessage[] {
-	return messages.map((message) => ({
-		role: message.role,
-		content: partsToText(message.parts),
-	}));
-}
 
 function errorStream(message: string): ReadableStream<Uint8Array> {
 	return new ReadableStream<Uint8Array>({
@@ -75,6 +72,11 @@ export async function POST(request: Request): Promise<Response> {
 		});
 	}
 
+	const modelMessages = await buildModelMessages(messages, {
+		supportsVision: resolved.supportsVision,
+		signal: request.signal,
+	});
+
 	const stream = new ReadableStream<Uint8Array>({
 		async start(controller) {
 			const aborted = (): boolean => request.signal.aborted;
@@ -94,7 +96,7 @@ export async function POST(request: Request): Promise<Response> {
 				const result = streamText({
 					model: resolved.model,
 					system: buildToolSystemPrompt(),
-					messages: toModelMessages(messages),
+					messages: modelMessages,
 					tools: createKnowledgeTools(request.signal),
 					providerOptions: resolved.providerOptions,
 					// Grounding is enforced via the system prompt (always search before

@@ -6,6 +6,15 @@ const BASE_SYSTEM_PROMPT =
 	"only access through the `searchKnowledge` tool. The documents can be about any subject, so make no " +
 	"assumptions about the domain.";
 
+const ATTACHMENTS =
+	"## Attachments\n" +
+	"- The user can attach files and images directly to a message. These are separate from the brain: " +
+	"images appear as inline image parts (when the model supports vision) and documents appear as inline " +
+	"text blocks labelled `[Attachment: …]`. Use them directly — no `searchKnowledge` call is needed to " +
+	"read an attachment.\n" +
+	"- A block labelled `[Image attachment: … — this model cannot view images]` means only best-effort OCR " +
+	"text was recovered; treat it as imperfect and say so if it is unreadable rather than inventing content.";
+
 const RETRIEVAL_STRATEGY =
 	"## Retrieving\n" +
 	"- Search the brain whenever the answer could depend on the user's own documents — which is most " +
@@ -42,7 +51,7 @@ const FORMATTING =
 	"Answer in clear, well-structured Markdown. Be concise but complete — use lists, tables, or code blocks " +
 	"when they make the answer easier to follow, and match the user's language.";
 
-const TOOL_INSTRUCTION = `${RETRIEVAL_STRATEGY}\n\n${GROUNDING}\n\n${FALLBACK}\n\n${FORMATTING}`;
+const TOOL_INSTRUCTION = `${ATTACHMENTS}\n\n${RETRIEVAL_STRATEGY}\n\n${GROUNDING}\n\n${FALLBACK}\n\n${FORMATTING}`;
 
 /**
  * System prompt for the agentic tool path: the model retrieves on demand via

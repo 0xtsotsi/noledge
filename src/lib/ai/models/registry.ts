@@ -19,6 +19,8 @@ export type ResolveModelResult =
 			model: LanguageModel;
 			/** Whether the resolved model streams a reasoning trace. */
 			reasoning: boolean;
+			/** Whether the resolved model accepts native image inputs. */
+			supportsVision: boolean;
 			/** Provider-specific options (e.g. enabling thinking/reasoning summaries). */
 			providerOptions: ProviderOptions | undefined;
 	  }
@@ -158,6 +160,7 @@ export function resolveModel(
 		ok: true,
 		model: instantiate(entry),
 		reasoning: entry.reasoning ?? false,
+		supportsVision: entry.vision ?? false,
 		providerOptions: reasoningProviderOptions(entry, thinkingEnabled),
 	};
 }

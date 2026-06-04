@@ -6,7 +6,10 @@ export type Attachment = {
 	id: string;
 	name: string;
 	type: string;
+	/** Object URL for local preview only (not sent to the server). */
 	url: string;
+	/** Raw file bytes, base64-encoded (no `data:` prefix), sent to the model. */
+	data: string;
 };
 
 export type AssistantImage = {

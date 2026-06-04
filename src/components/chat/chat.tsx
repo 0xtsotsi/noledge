@@ -21,12 +21,42 @@ function createId(): string {
 	return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Largest single attachment accepted client-side (mirrors the server cap). */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
 function toApiMessages(messages: UiMessage[]): ApiMessage[] {
 	return messages.map((message) => ({
 		id: message.id,
 		role: message.role,
-		parts: [{ type: "text", text: message.content }],
+		parts: [
+			{ type: "text" as const, text: message.content },
+			...(message.attachments ?? []).map((attachment) => ({
+				type: "file" as const,
+				name: attachment.name,
+				mediaType: attachment.type || "application/octet-stream",
+				data: attachment.data,
+			})),
+		],
 	}));
+}
+
+/** Read a file's bytes as a base64 string (without the `data:` URL prefix). */
+function readFileAsBase64(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = reader.result;
+			if (typeof result !== "string") {
+				reject(new Error("Unexpected file reader result"));
+				return;
+			}
+			const comma = result.indexOf(",");
+			resolve(comma === -1 ? result : result.slice(comma + 1));
+		};
+		reader.onerror = () =>
+			reject(reader.error ?? new Error("File read failed"));
+		reader.readAsDataURL(file);
+	});
 }
 
 function makeTitle(text: string): string {
@@ -377,13 +407,28 @@ export function Chat(): React.JSX.Element {
 	}, [messages, runStream, status]);
 
 	const onFilesAdded = useCallback((files: File[]): void => {
-		const next = files.map((file) => ({
-			id: createId(),
-			name: file.name,
-			type: file.type,
-			url: URL.createObjectURL(file),
-		}));
-		setAttachments((prev) => [...prev, ...next]);
+		for (const file of files) {
+			if (file.size > MAX_ATTACHMENT_BYTES) {
+				window.alert(
+					`"${file.name}" is too large (max ${Math.floor(
+						MAX_ATTACHMENT_BYTES / (1024 * 1024),
+					)} MB).`,
+				);
+				continue;
+			}
+			const id = createId();
+			const url = URL.createObjectURL(file);
+			readFileAsBase64(file)
+				.then((data) => {
+					setAttachments((prev) => [
+						...prev,
+						{ id, name: file.name, type: file.type, url, data },
+					]);
+				})
+				.catch(() => {
+					URL.revokeObjectURL(url);
+				});
+		}
 	}, []);
 
 	const removeAttachment = useCallback((id: string): void => {

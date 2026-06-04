@@ -11,10 +11,24 @@ export type ChatTextPart = {
 	text: string;
 };
 
+/**
+ * A file attachment carried on a user message. `data` is the raw file bytes
+ * encoded as base64 (no `data:` URL prefix). The server decides per model
+ * whether to forward images natively or extract their text.
+ */
+export type ChatFilePart = {
+	type: "file";
+	name: string;
+	mediaType: string;
+	data: string;
+};
+
+export type ChatMessagePart = ChatTextPart | ChatFilePart;
+
 export type ChatMessage = {
 	id: string;
 	role: ChatRole;
-	parts: ChatTextPart[];
+	parts: ChatMessagePart[];
 };
 
 export type ChatSource = {

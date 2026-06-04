@@ -18,6 +18,12 @@ export type ModelCatalogEntry = {
 	 * route enables provider-specific reasoning and streams the trace to the UI.
 	 */
 	reasoning?: boolean;
+	/**
+	 * Whether this model accepts image inputs. When true, image attachments are
+	 * forwarded to the model as native image parts; otherwise they are OCR'd to
+	 * text server-side so even text-only models receive their content.
+	 */
+	vision?: boolean;
 };
 
 /**
@@ -31,6 +37,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		label: "GPT-5.5",
 		default: true,
 		reasoning: true,
+		vision: true,
 	},
 	{
 		id: "claude-opus-4-8",
@@ -38,6 +45,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		label: "Claude Opus 4.8",
 		default: true,
 		reasoning: true,
+		vision: true,
 	},
 	{
 		id: "kimi-k2.6",
@@ -45,8 +53,13 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		label: "Kimi K2.6",
 		default: true,
 		reasoning: true,
+		// Native multimodal (MoonViT vision encoder); the Moonshot OpenAI-compatible
+		// API accepts image inputs as `image_url` content parts.
+		vision: true,
 	},
 	{
+		// Text-only: the MiniMax M-series ships no image input on its API, so image
+		// attachments are OCR'd to text rather than forwarded as native image parts.
 		id: "MiniMax-M3",
 		provider: "minimax",
 		label: "MiniMax M3",

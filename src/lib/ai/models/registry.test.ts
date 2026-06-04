@@ -102,6 +102,19 @@ describe("model registry", () => {
 		if (off.ok) expect(off.providerOptions).toBeUndefined();
 	});
 
+	it("reports vision support per model", async () => {
+		for (const key of KEYS) delete process.env[key];
+		process.env.OPENAI_API_KEY = "sk-test";
+		process.env.MINIMAX_API_KEY = "sk-minimax-test";
+		const { resolveModel } = await loadRegistry();
+
+		const gpt = resolveModel("gpt-5.5");
+		expect(gpt.ok && gpt.supportsVision).toBe(true);
+
+		const minimax = resolveModel("MiniMax-M3");
+		expect(minimax.ok && minimax.supportsVision).toBe(false);
+	});
+
 	it("errors for an unknown model id", async () => {
 		process.env.OPENAI_API_KEY = "sk-test";
 		const { resolveModel } = await loadRegistry();
