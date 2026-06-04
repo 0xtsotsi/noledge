@@ -4,6 +4,7 @@ import { embedTexts } from "@/lib/ai/embeddings/embed";
 import { resolveProviderKey } from "@/lib/ai/models/provider-config";
 import type { Embedder } from "@/lib/ai/rag/ingest";
 import { ingestText } from "@/lib/ai/rag/ingest";
+import { getPaperProvider, isPaperType } from "./papers";
 import { fetchFeed } from "./rss/parse";
 import {
 	type AutomationSource,
@@ -47,6 +48,23 @@ const defaultYoutubeDeps: YoutubeDeps = {
 
 /** Max recent items considered per source per poll (bounds embedding cost). */
 const MAX_ITEMS_PER_SOURCE = 10;
+
+/** Spacing between arXiv API requests to respect its rate limits. */
+const ARXIV_REQUEST_DELAY_MS = 3_000;
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+}
 
 export type PerSourceResult = {
 	sourceId: string;
@@ -135,6 +153,78 @@ async function pollRssSource(
 				sourceId: source.id,
 				externalId,
 				sourceUrl: item.link || undefined,
+			},
+			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
+		);
+		if (ingested.ok) {
+			if (ingested.duplicate) result.skipped += 1;
+			else result.added += 1;
+		} else {
+			result.status = result.added > 0 ? "partial" : "error";
+			result.error = ingested.error;
+		}
+	}
+
+	return result;
+}
+
+async function pollPaperSource(
+	source: AutomationSource,
+	deps: {
+		db: Database;
+		embedder: Embedder;
+		signal?: AbortSignal;
+	},
+): Promise<PerSourceResult> {
+	const result: PerSourceResult = {
+		sourceId: source.id,
+		type: source.type,
+		title: source.title ?? source.url,
+		added: 0,
+		skipped: 0,
+		status: "ok",
+	};
+
+	if (!isPaperType(source.type)) {
+		result.status = "error";
+		result.error = `Unknown paper source type: ${source.type}.`;
+		return result;
+	}
+
+	const provider = getPaperProvider(source.type);
+	const listed = await provider.list(
+		source.url,
+		source.identifier,
+		MAX_ITEMS_PER_SOURCE,
+		deps.signal,
+	);
+	if (!listed.ok) {
+		result.status = "error";
+		result.error = listed.error;
+		return result;
+	}
+
+	for (const item of listed.items) {
+		if (item.externalId.length === 0 || item.abstract.length === 0) {
+			result.skipped += 1;
+			continue;
+		}
+		if (documentExists(source.id, item.externalId, deps.db)) {
+			result.skipped += 1;
+			continue;
+		}
+
+		const text = `${item.title}\n\n${item.abstract}`.trim();
+		const ingested = await ingestText(
+			{
+				text,
+				title: item.title || item.externalId,
+				filename: item.url || item.externalId,
+				mime: "text/plain",
+				bytes: feedItemBytes(text),
+				sourceId: source.id,
+				externalId: item.externalId,
+				sourceUrl: item.url || undefined,
 			},
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
@@ -259,11 +349,21 @@ export async function runPoll(options: PollOptions = {}): Promise<PollSummary> {
 				fetchFn,
 				signal: options.signal,
 			});
-		} else {
+		} else if (source.type === "youtube") {
 			result = await pollYoutubeSource(source, {
 				db,
 				embedder,
 				youtube,
+				signal: options.signal,
+			});
+		} else {
+			// arXiv asks callers to space requests; pause before each arXiv poll.
+			if (source.type === "arxiv") {
+				await delay(ARXIV_REQUEST_DELAY_MS, options.signal);
+			}
+			result = await pollPaperSource(source, {
+				db,
+				embedder,
 				signal: options.signal,
 			});
 		}

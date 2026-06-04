@@ -2,6 +2,8 @@
 
 import type { Icon } from "@phosphor-icons/react";
 import {
+	CaretLeft,
+	CaretRight,
 	CircleNotch,
 	FileImage,
 	FilePdf,
@@ -47,6 +49,13 @@ function isYoutubeUrl(url: string | null): boolean {
 	return /(?:youtube\.com|youtu\.be)/i.test(url);
 }
 
+function isPaperUrl(url: string | null): boolean {
+	if (!url) return false;
+	return /(?:arxiv\.org|openalex\.org|doi\.org|pubmed\.ncbi\.nlm\.nih\.gov|biorxiv\.org|medrxiv\.org)/i.test(
+		url,
+	);
+}
+
 /**
  * Human label for the Type column. Automation-sourced docs read from provenance
  * (YouTube → “Video”, any other feed source → “Article”); manual uploads fall back
@@ -54,6 +63,7 @@ function isYoutubeUrl(url: string | null): boolean {
  */
 function typeLabel(doc: DocumentItem): string {
 	if (isYoutubeUrl(doc.sourceUrl)) return "Video";
+	if (isPaperUrl(doc.sourceUrl)) return "Paper";
 	if (doc.sourceId) return "Article";
 	const dot = doc.filename.lastIndexOf(".");
 	return dot === -1 ? "—" : doc.filename.slice(dot + 1).toUpperCase();
@@ -68,41 +78,66 @@ function iconFor(doc: DocumentItem): Icon {
 	return FileText;
 }
 
+const PAGE_SIZE = 25;
+
 export default function KnowledgePage(): React.JSX.Element {
 	const [documents, setDocuments] = useState<DocumentItem[]>([]);
+	const [total, setTotal] = useState(0);
+	const [page, setPage] = useState(0);
 	const [loading, setLoading] = useState(true);
 	const [deleting, setDeleting] = useState<string | null>(null);
 	const [uploadOpen, setUploadOpen] = useState(false);
 
-	const load = useCallback(async (): Promise<void> => {
+	const load = useCallback(async (pageIndex: number): Promise<void> => {
+		setLoading(true);
 		try {
-			const response = await fetch("/api/documents");
-			const data = (await response.json()) as { documents: DocumentItem[] };
+			const offset = pageIndex * PAGE_SIZE;
+			const response = await fetch(
+				`/api/documents?limit=${PAGE_SIZE}&offset=${offset}`,
+			);
+			const data = (await response.json()) as {
+				documents: DocumentItem[];
+				total: number;
+			};
 			setDocuments(data.documents);
+			setTotal(data.total);
 		} catch {
 			setDocuments([]);
+			setTotal(0);
 		} finally {
 			setLoading(false);
 		}
 	}, []);
 
 	useEffect(() => {
-		void load();
-	}, [load]);
+		void load(page);
+	}, [load, page]);
 
-	const remove = useCallback(async (id: string): Promise<void> => {
-		setDeleting(id);
-		try {
-			await fetch(`/api/documents?id=${encodeURIComponent(id)}`, {
-				method: "DELETE",
-			});
-			setDocuments((prev) => prev.filter((doc) => doc.id !== id));
-		} finally {
-			setDeleting(null);
-		}
-	}, []);
+	const remove = useCallback(
+		async (id: string): Promise<void> => {
+			setDeleting(id);
+			try {
+				await fetch(`/api/documents?id=${encodeURIComponent(id)}`, {
+					method: "DELETE",
+				});
+				// Reload so counts and the page slice stay correct; step back a page
+				// if we just removed the last row on a non-first page.
+				const remaining = total - 1;
+				const lastPage = Math.max(0, Math.ceil(remaining / PAGE_SIZE) - 1);
+				const nextPage = Math.min(page, lastPage);
+				if (nextPage === page) await load(page);
+				else setPage(nextPage);
+			} finally {
+				setDeleting(null);
+			}
+		},
+		[load, page, total],
+	);
 
-	const isEmpty = !loading && documents.length === 0;
+	const isEmpty = !loading && total === 0;
+	const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+	const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
+	const rangeEnd = Math.min(page * PAGE_SIZE + documents.length, total);
 
 	return (
 		<div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 px-6 py-8">
@@ -132,14 +167,18 @@ export default function KnowledgePage(): React.JSX.Element {
 				</div>
 			) : (
 				<div className="overflow-hidden rounded-xl border">
-					<table className="w-full text-sm">
+					<table className="w-full table-fixed text-sm">
 						<thead>
 							<tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
 								<th className="px-4 py-2.5 font-medium">Name</th>
-								<th className="px-4 py-2.5 font-medium">Type</th>
-								<th className="px-4 py-2.5 text-right font-medium">Chunks</th>
-								<th className="px-4 py-2.5 text-right font-medium">Size</th>
-								<th className="px-4 py-2.5 font-medium">Added</th>
+								<th className="w-24 px-4 py-2.5 font-medium">Type</th>
+								<th className="w-20 px-4 py-2.5 text-right font-medium">
+									Chunks
+								</th>
+								<th className="w-24 px-4 py-2.5 text-right font-medium">
+									Size
+								</th>
+								<th className="w-32 px-4 py-2.5 font-medium">Added</th>
 								<th className="w-12 px-4 py-2.5" />
 							</tr>
 						</thead>
@@ -201,10 +240,47 @@ export default function KnowledgePage(): React.JSX.Element {
 				</div>
 			)}
 
+			{!loading && total > 0 ? (
+				<div className="flex items-center justify-between gap-4">
+					<p className="text-xs text-muted-foreground">
+						{rangeStart}–{rangeEnd} of {total}
+					</p>
+					<div className="flex items-center gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							type="button"
+							disabled={page === 0}
+							onClick={() => setPage((p) => Math.max(0, p - 1))}
+						>
+							<CaretLeft className="size-4" />
+							Previous
+						</Button>
+						<span className="text-xs text-muted-foreground tabular-nums">
+							{page + 1} / {pageCount}
+						</span>
+						<Button
+							variant="outline"
+							size="sm"
+							type="button"
+							disabled={page >= pageCount - 1}
+							onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+						>
+							Next
+							<CaretRight className="size-4" />
+						</Button>
+					</div>
+				</div>
+			) : null}
+
 			<UploadDialog
 				open={uploadOpen}
 				onOpenChange={setUploadOpen}
-				onUploaded={() => void load()}
+				onUploaded={() => {
+					// New docs sort to the top; jump to the first page to reveal them.
+					if (page === 0) void load(0);
+					else setPage(0);
+				}}
 			/>
 		</div>
 	);

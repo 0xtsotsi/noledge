@@ -36,8 +36,9 @@ const GROUNDING =
 	"missing rather than filling gaps with guesses.\n" +
 	"- If passages conflict, surface the disagreement and attribute each claim to its source instead of " +
 	"silently choosing one.\n" +
-	"- Cite the source document titles you relied on inline, e.g. (source: «Title»), so the user can trace " +
-	"each claim. Cite only sources you actually used.";
+	"- The documents you actually used are shown to the user as separate source chips automatically, so do " +
+	"not write inline citations like (source: «Title»). When you need to attribute a specific claim — e.g. " +
+	"to distinguish conflicting sources — refer to the document by its title naturally in the sentence.";
 
 const FALLBACK =
 	"## When the brain has little or nothing\n" +

@@ -65,13 +65,42 @@ export async function POST(request: Request): Promise<Response> {
 	});
 }
 
-export async function GET(): Promise<Response> {
+const DEFAULT_LIMIT = 25;
+const MAX_LIMIT = 100;
+
+/** Parse a non-negative integer query param, clamped to [min, max]. */
+function parseIntParam(
+	value: string | null,
+	fallback: number,
+	min: number,
+	max: number,
+): number {
+	const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.min(Math.max(parsed, min), max);
+}
+
+export async function GET(request: Request): Promise<Response> {
+	const params = new URL(request.url).searchParams;
+	const limit = parseIntParam(params.get("limit"), DEFAULT_LIMIT, 1, MAX_LIMIT);
+	const offset = parseIntParam(
+		params.get("offset"),
+		0,
+		0,
+		Number.MAX_SAFE_INTEGER,
+	);
+
 	const db = getDatabase();
+	const total = (
+		db.prepare("SELECT COUNT(*) AS count FROM documents").get() as {
+			count: number;
+		}
+	).count;
 	const rows = db
 		.prepare(
-			"SELECT id, title, filename, mime, bytes, created_at, source_id, source_url FROM documents ORDER BY created_at DESC",
+			"SELECT id, title, filename, mime, bytes, created_at, source_id, source_url FROM documents ORDER BY created_at DESC LIMIT ? OFFSET ?",
 		)
-		.all() as DocumentRow[];
+		.all(limit, offset) as DocumentRow[];
 
 	const documents = rows.map((row) => ({
 		id: row.id,
@@ -89,7 +118,7 @@ export async function GET(): Promise<Response> {
 		).count,
 	}));
 
-	return Response.json({ documents });
+	return Response.json({ documents, total, limit, offset });
 }
 
 export async function DELETE(request: Request): Promise<Response> {

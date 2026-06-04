@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export type SourceType = "rss" | "youtube";
+export type SourceType =
+	| "rss"
+	| "youtube"
+	| "arxiv"
+	| "openalex"
+	| "pubmed"
+	| "biorxiv"
+	| "medrxiv";
 
 export type AutomationSourceItem = {
 	id: string;
@@ -68,6 +75,7 @@ export function useAutomation(): {
 	config: AutomationConfigState | null;
 	rss: AutomationSourceItem[];
 	youtube: AutomationSourceItem[];
+	papers: AutomationSourceItem[];
 	loading: boolean;
 	reloadConfig: () => Promise<void>;
 	reloadSources: () => Promise<void>;
@@ -78,10 +86,12 @@ export function useAutomation(): {
 	testSource: (
 		type: SourceType,
 		url: string,
+		identifier?: string | null,
 	) => Promise<Result<RssPreview | YoutubePreview>>;
 	addSource: (
 		type: SourceType,
 		url: string,
+		identifier?: string | null,
 	) => Promise<Result<AutomationSourceItem>>;
 	removeSource: (id: string) => Promise<void>;
 	syncNow: () => Promise<Result<PollSummary>>;
@@ -89,6 +99,7 @@ export function useAutomation(): {
 	const [config, setConfig] = useState<AutomationConfigState | null>(null);
 	const [rss, setRss] = useState<AutomationSourceItem[]>([]);
 	const [youtube, setYoutube] = useState<AutomationSourceItem[]>([]);
+	const [papers, setPapers] = useState<AutomationSourceItem[]>([]);
 	const [loading, setLoading] = useState(true);
 
 	const reloadConfig = useCallback(async (): Promise<void> => {
@@ -103,9 +114,11 @@ export function useAutomation(): {
 			const data = (await response.json()) as {
 				rss: AutomationSourceItem[];
 				youtube: AutomationSourceItem[];
+				papers: AutomationSourceItem[];
 			};
 			setRss(data.rss);
 			setYoutube(data.youtube);
+			setPapers(data.papers);
 		}
 	}, []);
 
@@ -138,11 +151,12 @@ export function useAutomation(): {
 		async (
 			type: SourceType,
 			url: string,
+			identifier?: string | null,
 		): Promise<Result<RssPreview | YoutubePreview>> => {
 			const response = await fetch("/api/automate/sources/test", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ type, url }),
+				body: JSON.stringify({ type, url, identifier }),
 			});
 			if (!response.ok) return { ok: false, error: await readError(response) };
 			const data = (await response.json()) as {
@@ -157,18 +171,21 @@ export function useAutomation(): {
 		async (
 			type: SourceType,
 			url: string,
+			identifier?: string | null,
 		): Promise<Result<AutomationSourceItem>> => {
 			const response = await fetch("/api/automate/sources", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ type, url }),
+				body: JSON.stringify({ type, url, identifier }),
 			});
 			if (!response.ok) return { ok: false, error: await readError(response) };
 			const data = (await response.json()) as { source: AutomationSourceItem };
 			if (data.source.type === "rss") {
 				setRss((prev) => [data.source, ...prev]);
-			} else {
+			} else if (data.source.type === "youtube") {
 				setYoutube((prev) => [data.source, ...prev]);
+			} else {
+				setPapers((prev) => [data.source, ...prev]);
 			}
 			return { ok: true, value: data.source };
 		},
@@ -181,6 +198,7 @@ export function useAutomation(): {
 		});
 		setRss((prev) => prev.filter((s) => s.id !== id));
 		setYoutube((prev) => prev.filter((s) => s.id !== id));
+		setPapers((prev) => prev.filter((s) => s.id !== id));
 	}, []);
 
 	const syncNow = useCallback(async (): Promise<Result<PollSummary>> => {
@@ -195,6 +213,7 @@ export function useAutomation(): {
 		config,
 		rss,
 		youtube,
+		papers,
 		loading,
 		reloadConfig,
 		reloadSources,

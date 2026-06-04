@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getPaperProvider, isPaperType } from "@/lib/ai/automate/papers";
 import { previewFeed } from "@/lib/ai/automate/rss/preview";
 import {
 	type AutomationSource,
@@ -31,12 +32,22 @@ export async function GET(): Promise<Response> {
 	return Response.json({
 		rss: sources.filter((s) => s.type === "rss").map(serialize),
 		youtube: sources.filter((s) => s.type === "youtube").map(serialize),
+		papers: sources.filter((s) => isPaperType(s.type)).map(serialize),
 	});
 }
 
 const postSchema = z.object({
-	type: z.enum(["rss", "youtube"]),
+	type: z.enum([
+		"rss",
+		"youtube",
+		"arxiv",
+		"openalex",
+		"pubmed",
+		"biorxiv",
+		"medrxiv",
+	]),
 	url: z.string().min(1, "URL is required"),
+	identifier: z.string().nullish(),
 });
 
 /** Resolve + validate, then add a source. */
@@ -56,8 +67,31 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const { type, url } = parsed.data;
+	const { type, url, identifier } = parsed.data;
 	const trimmedUrl = url.trim();
+
+	if (isPaperType(type)) {
+		const provider = getPaperProvider(type);
+		const mode = identifier ?? null;
+		const preview = await provider.preview(trimmedUrl, mode, request.signal);
+		if (!preview.ok) {
+			return Response.json({ error: preview.error }, { status: 422 });
+		}
+		const duplicate = findDuplicateSource({ type, url: trimmedUrl });
+		if (duplicate) {
+			return Response.json(
+				{ error: "This source has already been added." },
+				{ status: 409 },
+			);
+		}
+		const source = addSource({
+			type,
+			url: trimmedUrl,
+			identifier: mode,
+			title: preview.preview.title,
+		});
+		return Response.json({ source: serialize(source) });
+	}
 
 	if (type === "rss") {
 		const preview = await previewFeed(trimmedUrl, request.signal);

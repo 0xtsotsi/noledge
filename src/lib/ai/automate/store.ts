@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
 import { getDatabase } from "@/lib/ai/db/client";
+import { isPaperType } from "./papers";
+import type { PaperType } from "./papers/types";
 
 /**
  * Typed DB accessors for the automation feature: schedule config, source CRUD,
@@ -8,7 +10,7 @@ import { getDatabase } from "@/lib/ai/db/client";
  * unofficial InnerTube client, so no API key is stored here.
  */
 
-export type SourceType = "rss" | "youtube";
+export type SourceType = "rss" | "youtube" | PaperType;
 export type SourceStatus = "ok" | "error" | "partial";
 
 export type AutomationSource = {
@@ -45,10 +47,17 @@ type SourceRow = {
 	last_item_count: number;
 };
 
+/** Map a stored `type` string onto the typed {@link SourceType} union. */
+function toSourceType(type: string): SourceType {
+	if (type === "youtube") return "youtube";
+	if (isPaperType(type)) return type;
+	return "rss";
+}
+
 function mapSource(row: SourceRow): AutomationSource {
 	return {
 		id: row.id,
-		type: row.type === "youtube" ? "youtube" : "rss",
+		type: toSourceType(row.type),
 		url: row.url,
 		identifier: row.identifier,
 		title: row.title,

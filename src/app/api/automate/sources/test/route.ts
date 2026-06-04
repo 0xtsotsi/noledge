@@ -1,12 +1,22 @@
 import { z } from "zod";
+import { getPaperProvider, isPaperType } from "@/lib/ai/automate/papers";
 import { previewFeed } from "@/lib/ai/automate/rss/preview";
 import { resolveChannel } from "@/lib/ai/automate/youtube/channel";
 import { fetchTranscript } from "@/lib/ai/automate/youtube/transcript";
 import { listRecentVideos } from "@/lib/ai/automate/youtube/videos";
 
 const testSchema = z.object({
-	type: z.enum(["rss", "youtube"]),
+	type: z.enum([
+		"rss",
+		"youtube",
+		"arxiv",
+		"openalex",
+		"pubmed",
+		"biorxiv",
+		"medrxiv",
+	]),
 	url: z.string().min(1, "URL is required"),
+	identifier: z.string().nullish(),
 });
 
 /**
@@ -30,7 +40,7 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const { type, url } = parsed.data;
+	const { type, url, identifier } = parsed.data;
 	const trimmedUrl = url.trim();
 
 	if (type === "rss") {
@@ -39,6 +49,19 @@ export async function POST(request: Request): Promise<Response> {
 			return Response.json({ error: preview.error }, { status: 422 });
 		}
 		return Response.json({ type: "rss", preview: preview.preview });
+	}
+
+	if (isPaperType(type)) {
+		const provider = getPaperProvider(type);
+		const preview = await provider.preview(
+			trimmedUrl,
+			identifier ?? null,
+			request.signal,
+		);
+		if (!preview.ok) {
+			return Response.json({ error: preview.error }, { status: 422 });
+		}
+		return Response.json({ type, preview: preview.preview });
 	}
 
 	const resolved = await resolveChannel(trimmedUrl);

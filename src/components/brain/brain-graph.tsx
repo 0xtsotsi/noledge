@@ -1,5 +1,10 @@
 "use client";
 
+import {
+	ArrowsOutSimple,
+	MagnifyingGlassMinus,
+	MagnifyingGlassPlus,
+} from "@phosphor-icons/react";
 import { forceCollide } from "d3-force-3d";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph3D, {
@@ -9,6 +14,7 @@ import ForceGraph3D, {
 import * as THREE from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
+import { Button } from "@/components/ui/button";
 import type {
 	BrainGraph as BrainGraphData,
 	BrainLink,
@@ -46,11 +52,43 @@ type NodeCoords = { x?: number; y?: number; z?: number };
 type ClusterLabel = {
 	documentId: string;
 	title: string;
+	/** What is actually rendered — truncated at rest, longer when focused. */
+	text: string;
 	color: string;
 	x: number;
 	y: number;
 	visible: boolean;
+	/** The hovered cluster — shown in full and emphasized. */
+	focused: boolean;
+	/** De-emphasized because a different cluster is focused. */
+	faded: boolean;
 };
+
+// Largest clusters that stay labelled even in the zoomed-out overview, so the
+// map always has a few anchors to orient by.
+const ANCHOR_COUNT = 6;
+// Approximate text-xs metrics used to estimate a label's screen box for the
+// collision pass (avg glyph width + horizontal padding, line height).
+const CHAR_PX = 6.2;
+const LABEL_PAD_PX = 16;
+const LABEL_H_PX = 22;
+
+/** Shorten a title to a single readable chip, with an ellipsis when clipped. */
+function truncateLabel(title: string, max: number): string {
+	if (title.length <= max) return title;
+	return `${title.slice(0, max - 1).trimEnd()}\u2026`;
+}
+
+/** Center-anchored axis-aligned box overlap test for label collision. */
+function boxesOverlap(
+	a: { x: number; y: number; w: number; h: number },
+	b: { x: number; y: number; w: number; h: number },
+): boolean {
+	return (
+		Math.abs(a.x - b.x) < (a.w + b.w) / 2 &&
+		Math.abs(a.y - b.y) < (a.h + b.h) / 2
+	);
+}
 
 // Highlight/dim anchors per theme. Dark mode flares toward near-white on a dark
 // canvas; light mode flares toward near-black so nodes stay legible on white.
@@ -154,6 +192,9 @@ export function BrainGraph({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [size, setSize] = useState({ width: 0, height: 0 });
 	const [hovered, setHovered] = useState<GraphNode | null>(null);
+	// A clicked cluster stays selected: its nodes flare while everything else
+	// dims, until the background is clicked or another cluster is selected.
+	const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
 
 	// Per-element animated highlight intensity (0 = resting, 1 = fully lit).
 	// Eased every frame toward a target so hover transitions glide in/out.
@@ -161,6 +202,15 @@ export function BrainGraph({
 	const linkIntensity = useRef(new Map<GraphLink, number>());
 	const focusRef = useRef<ReturnType<typeof neighborsOf> | null>(null);
 	const hoveredIdRef = useRef<string | null>(null);
+	// Node ids that should flare to the bright "hot" colour: the hovered node, or
+	// every node of the selected cluster.
+	const hotIdsRef = useRef<Set<string>>(new Set());
+	// Document of the hovered node, read by the label loop to focus that cluster's
+	// label and fade the rest. Cleared on unhover (unlike hoveredIdRef).
+	const hoveredDocRef = useRef<string | null>(null);
+	// Camera distance right after the initial zoom-to-fit, used as the reference
+	// for "overview" vs "zoomed in" so label gating adapts to the graph's scale.
+	const baselineDistanceRef = useRef<number | null>(null);
 
 	// react-force-graph mutates link.source/target into node objects, so clone.
 	const data = useMemo(
@@ -182,17 +232,49 @@ export function BrainGraph({
 		});
 	}, []);
 
-	const focus = useMemo(
+	// The selected cluster as a focus set: every node of the document, plus the
+	// links whose both endpoints live inside it (its internal structure).
+	const selection = useMemo(() => {
+		if (!selectedDoc) return null;
+		const docByNode = new Map<string, string>(
+			data.nodes.map((node) => [String(node.id), node.documentId]),
+		);
+		const nodes = new Set<string>();
+		for (const node of data.nodes) {
+			if (node.documentId === selectedDoc) nodes.add(String(node.id));
+		}
+		const links = new Set<GraphLink>();
+		for (const link of data.links) {
+			const source = endpointId(link.source);
+			const target = endpointId(link.target);
+			if (
+				docByNode.get(source) === selectedDoc &&
+				docByNode.get(target) === selectedDoc
+			)
+				links.add(link);
+		}
+		return { nodes, links };
+	}, [selectedDoc, data.nodes, data.links]);
+
+	const hoverFocus = useMemo(
 		() => (hovered ? neighborsOf(hovered, data.links) : null),
 		[hovered, data.links],
 	);
 
-	// Mirror hover state into refs so the per-frame animation loop can read the
-	// current target without being recreated on every hover. `hoveredIdRef` is
-	// kept sticky on unhover so the flared node's white eases back to base via its
-	// own fading intensity instead of snapping in a single frame.
+	// Hover refines on top of a selection; otherwise the selection drives focus.
+	const focus = hoverFocus ?? selection;
+
+	// Mirror hover/selection state into refs so the per-frame animation loop can
+	// read the current target without being recreated on every change.
+	// `hoveredIdRef` is kept sticky on unhover so the flared node's white eases
+	// back to base via its own fading intensity instead of snapping in a frame.
 	focusRef.current = focus;
 	if (hovered) hoveredIdRef.current = String(hovered.id);
+	hoveredDocRef.current = hovered ? hovered.documentId : selectedDoc;
+	// What flares hot: the single hovered node, or the whole selected cluster.
+	hotIdsRef.current = hovered
+		? new Set([String(hovered.id)])
+		: (selection?.nodes ?? new Set());
 
 	const docColors = useMemo(() => documentColorMap(data.nodes), [data.nodes]);
 
@@ -215,8 +297,18 @@ export function BrainGraph({
 				});
 			}
 		}
-		return [...byDoc.values()];
+		// Largest clusters first so label placement gives them priority and the top
+		// few can serve as always-on anchors.
+		return [...byDoc.values()].sort(
+			(a, b) => b.nodeIds.length - a.nodeIds.length,
+		);
 	}, [data.nodes]);
+
+	// Document ids of the largest clusters, kept labelled even in the overview.
+	const anchorIds = useMemo(
+		() => new Set(clusters.slice(0, ANCHOR_COUNT).map((c) => c.documentId)),
+		[clusters],
+	);
 
 	// Screen-space position + visibility for each cluster label, refreshed every
 	// frame from the projected centroid of the cluster's nodes.
@@ -298,9 +390,21 @@ export function BrainGraph({
 		const controls = fg.controls() as { zoomSpeed?: number };
 		controls.zoomSpeed = 3.2;
 		// Frame the whole constellation once it has settled (matches the common
-		// force-graph pattern of zoomToFit on load).
+		// force-graph pattern of zoomToFit on load), then capture the fitted camera
+		// distance as the baseline for label zoom-gating.
 		const fitTimer = setTimeout(() => fg.zoomToFit(700, 60), 1200);
-		return () => clearTimeout(fitTimer);
+		const baselineTimer = setTimeout(() => {
+			const cam = fg.camera();
+			baselineDistanceRef.current = Math.hypot(
+				cam.position.x,
+				cam.position.y,
+				cam.position.z,
+			);
+		}, 2100);
+		return () => {
+			clearTimeout(fitTimer);
+			clearTimeout(baselineTimer);
+		};
 	}, [size.width]);
 
 	// Animation loop: ease each node/link intensity toward its focus target and
@@ -360,14 +464,43 @@ export function BrainGraph({
 				const x = a[i];
 				const y = b[i];
 				if (!x || !y) return true;
-				if (x.documentId !== y.documentId || x.visible !== y.visible)
+				if (
+					x.documentId !== y.documentId ||
+					x.visible !== y.visible ||
+					x.focused !== y.focused ||
+					x.faded !== y.faded ||
+					x.text !== y.text
+				)
 					return true;
 				if (Math.abs(x.x - y.x) > 0.5 || Math.abs(x.y - y.y) > 0.5) return true;
 			}
 			return false;
 		};
 		const tick = (): void => {
-			const next: ClusterLabel[] = [];
+			// Overview vs zoomed-in: while far out (near the fitted distance) only
+			// anchor + focused labels show; zooming in reveals the rest.
+			const cam = fg.camera();
+			const distance = Math.hypot(
+				cam.position.x,
+				cam.position.y,
+				cam.position.z,
+			);
+			const baseline = baselineDistanceRef.current;
+			const overview = baseline != null && distance > baseline * 0.85;
+			const focusDoc = hoveredDocRef.current;
+
+			// First project every cluster centroid to screen space, then place by
+			// priority with collision culling so labels never stack.
+			type Candidate = {
+				documentId: string;
+				title: string;
+				x: number;
+				y: number;
+				visible: boolean;
+				isAnchor: boolean;
+				isFocused: boolean;
+			};
+			const candidates: Candidate[] = [];
 			for (const cluster of clusters) {
 				let sx = 0;
 				let sy = 0;
@@ -383,13 +516,52 @@ export function BrainGraph({
 				if (count === 0) continue;
 				const x = sx / count;
 				const y = sy / count;
-				next.push({
+				candidates.push({
 					documentId: cluster.documentId,
 					title: cluster.title,
-					color: docColors.get(cluster.documentId) ?? "#22d3ee",
 					x,
 					y,
 					visible: x >= 0 && y >= 0 && x <= size.width && y <= size.height,
+					isAnchor: anchorIds.has(cluster.documentId),
+					isFocused: focusDoc === cluster.documentId,
+				});
+			}
+
+			// Focused label wins, then larger clusters (candidates already sorted by
+			// size). Placing in this order lets greedy collision keep the important
+			// labels and drop the ones that would overlap them.
+			candidates.sort((a, b) => Number(b.isFocused) - Number(a.isFocused));
+
+			const placed: { x: number; y: number; w: number; h: number }[] = [];
+			const next: ClusterLabel[] = [];
+			for (const cand of candidates) {
+				if (!cand.visible) continue;
+				// In the overview, only anchors and the focused cluster are labelled.
+				if (overview && !cand.isAnchor && !cand.isFocused) continue;
+				const text = cand.isFocused
+					? truncateLabel(cand.title, 72)
+					: truncateLabel(cand.title, 30);
+				const box = {
+					x: cand.x,
+					y: cand.y,
+					w: text.length * CHAR_PX + LABEL_PAD_PX,
+					h: LABEL_H_PX,
+				};
+				// The focused label is never culled; everything else yields to it and
+				// to already-placed higher-priority labels.
+				if (!cand.isFocused && placed.some((p) => boxesOverlap(p, box)))
+					continue;
+				placed.push(box);
+				next.push({
+					documentId: cand.documentId,
+					title: cand.title,
+					text,
+					color: docColors.get(cand.documentId) ?? "#22d3ee",
+					x: cand.x,
+					y: cand.y,
+					visible: true,
+					focused: cand.isFocused,
+					faded: focusDoc != null && !cand.isFocused,
 				});
 			}
 			if (changedEnough(next, prev)) {
@@ -400,7 +572,7 @@ export function BrainGraph({
 		};
 		frame = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(frame);
-	}, [clusters, data.nodes, docColors, size.width, size.height]);
+	}, [clusters, anchorIds, data.nodes, docColors, size.width, size.height]);
 
 	const nodeColor = useCallback(
 		(node: GraphNode): string => {
@@ -411,9 +583,9 @@ export function BrainGraph({
 			const dim = isDark ? NODE_DIM_DARK : NODE_DIM_LIGHT;
 			const intensity = nodeIntensity.current.get(String(node.id)) ?? 0;
 			if (intensity >= 0) {
-				// 0 → resting colour, 1 → bright flare on the focused node.
-				const isHovered = String(node.id) === hoveredIdRef.current;
-				return lerpColor(base, isHovered ? hot : base, intensity);
+				// 0 → resting colour, 1 → bright flare on the hot (hovered/selected) nodes.
+				const isHot = hotIdsRef.current.has(String(node.id));
+				return lerpColor(base, isHot ? hot : base, intensity);
 			}
 			// Negative intensity fades toward the dim colour for unrelated nodes.
 			return lerpColor(base, dim, -intensity);
@@ -446,6 +618,94 @@ export function BrainGraph({
 		[],
 	);
 
+	const zoomCamera = useCallback((factor: number): void => {
+		const fg = fgRef.current;
+		if (!fg) return;
+		const cam = fg.camera();
+		const controls = fg.controls() as { target?: THREE.Vector3 };
+		const target = controls.target ?? new THREE.Vector3(0, 0, 0);
+		fg.cameraPosition(
+			{
+				x: target.x + (cam.position.x - target.x) * factor,
+				y: target.y + (cam.position.y - target.y) * factor,
+				z: target.z + (cam.position.z - target.z) * factor,
+			},
+			{ x: target.x, y: target.y, z: target.z },
+			350,
+		);
+	}, []);
+
+	const resetView = useCallback((): void => {
+		setSelectedDoc(null);
+		fgRef.current?.zoomToFit(900, 80);
+	}, []);
+
+	// Clicking a cluster label selects it (dimming everything else) and flies the
+	// camera to look directly at its centroid. Clicking the selected one clears it.
+	// `zoomToFit` only rescales distance along the current view axis, so an
+	// off-centre cluster stays off-centre; we instead recentre on the centroid.
+	const focusCluster = useCallback(
+		(documentId: string): void => {
+			const fg = fgRef.current;
+			const willDeselect = selectedDoc === documentId;
+			setSelectedDoc(willDeselect ? null : documentId);
+			if (!fg) return;
+			if (willDeselect) {
+				fg.zoomToFit(900, 80);
+				return;
+			}
+
+			// Centroid + bounding radius of the cluster's settled node positions.
+			const coords: NodeCoords[] = [];
+			for (const node of data.nodes) {
+				if (node.documentId !== documentId) continue;
+				const c = node as NodeCoords;
+				if (c.x != null && c.y != null) coords.push(c);
+			}
+			if (coords.length === 0) return;
+			let cx = 0;
+			let cy = 0;
+			let cz = 0;
+			for (const c of coords) {
+				cx += c.x ?? 0;
+				cy += c.y ?? 0;
+				cz += c.z ?? 0;
+			}
+			cx /= coords.length;
+			cy /= coords.length;
+			cz /= coords.length;
+			let radius = 0;
+			for (const c of coords) {
+				radius = Math.max(
+					radius,
+					Math.hypot((c.x ?? 0) - cx, (c.y ?? 0) - cy, (c.z ?? 0) - cz),
+				);
+			}
+
+			// Keep the current view direction but pull the camera to a distance that
+			// frames the cluster, then look straight at its centroid.
+			const cam = fg.camera();
+			let dx = cam.position.x - cx;
+			let dy = cam.position.y - cy;
+			let dz = cam.position.z - cz;
+			const len = Math.hypot(dx, dy, dz) || 1;
+			dx /= len;
+			dy /= len;
+			dz /= len;
+			const distance = Math.max(radius * 2.6, 140);
+			fg.cameraPosition(
+				{
+					x: cx + dx * distance,
+					y: cy + dy * distance,
+					z: cz + dz * distance,
+				},
+				{ x: cx, y: cy, z: cz },
+				900,
+			);
+		},
+		[selectedDoc, data.nodes],
+	);
+
 	return (
 		<div ref={containerRef} className="relative size-full">
 			<ForceGraph3D<GraphNode, GraphLink>
@@ -472,6 +732,7 @@ export function BrainGraph({
 				linkDirectionalParticleColor={() =>
 					isDark ? LINK_HOT_DARK : LINK_HOT_LIGHT
 				}
+				onBackgroundClick={() => setSelectedDoc(null)}
 				onNodeHover={handleNodeHover}
 				onNodeClick={(node) => {
 					const fg = fgRef.current;
@@ -487,26 +748,71 @@ export function BrainGraph({
 				enableNodeDrag={false}
 				showNavInfo={false}
 			/>
-			{labels.map((label) =>
-				label.visible ? (
-					<span
-						key={label.documentId}
-						className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium"
-						style={{
-							left: label.x,
-							top: label.y,
-							color: isDark
-								? label.color
-								: lerpColor(label.color, "#0f172a", 0.5),
-							backgroundColor: isDark
-								? "rgba(21, 23, 24, 0.6)"
+			<div className="absolute top-6 right-6 z-30 flex items-center gap-1 rounded-full border bg-background/85 p-1 shadow-sm backdrop-blur">
+				<Button
+					variant="ghost"
+					size="icon"
+					type="button"
+					className="size-8"
+					aria-label="Zoom in"
+					title="Zoom in"
+					onClick={() => zoomCamera(0.68)}
+				>
+					<MagnifyingGlassPlus className="size-4" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					type="button"
+					className="size-8"
+					aria-label="Zoom out"
+					title="Zoom out"
+					onClick={() => zoomCamera(1.45)}
+				>
+					<MagnifyingGlassMinus className="size-4" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					type="button"
+					className="size-8"
+					aria-label="Reset camera"
+					title="Reset camera"
+					onClick={resetView}
+				>
+					<ArrowsOutSimple className="size-4" />
+				</Button>
+			</div>
+			{labels.map((label) => (
+				<button
+					type="button"
+					key={label.documentId}
+					onClick={() => focusCluster(label.documentId)}
+					title={label.title}
+					className="absolute z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium transition-opacity duration-200 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60"
+					style={{
+						left: label.x,
+						top: label.y,
+						opacity: label.faded ? 0.3 : 1,
+						zIndex: label.focused ? 20 : 10,
+						color: isDark
+							? label.color
+							: lerpColor(label.color, "#0f172a", 0.5),
+						backgroundColor: isDark
+							? label.focused
+								? "rgba(21, 23, 24, 0.92)"
+								: "rgba(21, 23, 24, 0.6)"
+							: label.focused
+								? "rgba(255, 255, 255, 0.95)"
 								: "rgba(255, 255, 255, 0.7)",
-						}}
-					>
-						{label.title}
-					</span>
-				) : null,
-			)}
+						boxShadow: label.focused
+							? "0 1px 8px rgba(0, 0, 0, 0.35)"
+							: undefined,
+					}}
+				>
+					{label.text}
+				</button>
+			))}
 		</div>
 	);
 }

@@ -3,11 +3,13 @@
 import {
 	ArrowsClockwise,
 	CircleNotch,
+	GraduationCap,
 	MonitorPlay,
-	PencilSimple,
+	Plus,
 	Rss,
 } from "@phosphor-icons/react";
 import { useState } from "react";
+import { PapersSourcesDialog } from "@/components/automate/papers-sources-dialog";
 import { RssSourcesDialog } from "@/components/automate/rss-sources-dialog";
 import { ScheduleCard } from "@/components/automate/schedule-card";
 import { YoutubeSourcesDialog } from "@/components/automate/youtube-sources-dialog";
@@ -28,6 +30,7 @@ export default function AutomatePage(): React.JSX.Element {
 	const automation = useAutomation();
 	const [rssOpen, setRssOpen] = useState(false);
 	const [youtubeOpen, setYoutubeOpen] = useState(false);
+	const [papersOpen, setPapersOpen] = useState(false);
 	const [syncing, setSyncing] = useState(false);
 	const [syncResult, setSyncResult] = useState<string | null>(null);
 
@@ -95,18 +98,20 @@ export default function AutomatePage(): React.JSX.Element {
 
 			<div className="grid gap-4 sm:grid-cols-2">
 				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
-					<Button
-						variant="ghost"
-						size="icon"
-						className="absolute top-3 right-3 size-8 text-muted-foreground"
-						aria-label="Edit blog feeds"
-						onClick={() => setRssOpen(true)}
-					>
-						<PencilSimple className="size-4" />
-					</Button>
-					<div className="flex items-center gap-2">
-						<Rss className="size-4 text-muted-foreground" />
-						<h2 className="text-sm font-semibold">Blog feeds (RSS)</h2>
+					<div className="flex items-center justify-between gap-2">
+						<div className="flex items-center gap-2">
+							<Rss className="size-4 text-muted-foreground" />
+							<h2 className="text-sm font-semibold">Blog feeds (RSS)</h2>
+						</div>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="-mr-2 h-7 px-2 text-muted-foreground"
+							onClick={() => setRssOpen(true)}
+						>
+							<Plus className="size-4" />
+							{automation.rss.length > 0 ? "Add or edit" : "Add"}
+						</Button>
 					</div>
 					<p className="text-2xl font-semibold tabular-nums">
 						{automation.rss.length}
@@ -114,21 +119,44 @@ export default function AutomatePage(): React.JSX.Element {
 				</div>
 
 				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
-					<Button
-						variant="ghost"
-						size="icon"
-						className="absolute top-3 right-3 size-8 text-muted-foreground"
-						aria-label="Edit YouTube channels"
-						onClick={() => setYoutubeOpen(true)}
-					>
-						<PencilSimple className="size-4" />
-					</Button>
-					<div className="flex items-center gap-2">
-						<MonitorPlay className="size-4 text-muted-foreground" />
-						<h2 className="text-sm font-semibold">YouTube channels</h2>
+					<div className="flex items-center justify-between gap-2">
+						<div className="flex items-center gap-2">
+							<MonitorPlay className="size-4 text-muted-foreground" />
+							<h2 className="text-sm font-semibold">YouTube channels</h2>
+						</div>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="-mr-2 h-7 px-2 text-muted-foreground"
+							onClick={() => setYoutubeOpen(true)}
+						>
+							<Plus className="size-4" />
+							{automation.youtube.length > 0 ? "Add or edit" : "Add"}
+						</Button>
 					</div>
 					<p className="text-2xl font-semibold tabular-nums">
 						{automation.youtube.length}
+					</p>
+				</div>
+
+				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
+					<div className="flex items-center justify-between gap-2">
+						<div className="flex items-center gap-2">
+							<GraduationCap className="size-4 text-muted-foreground" />
+							<h2 className="text-sm font-semibold">Research papers</h2>
+						</div>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="-mr-2 h-7 px-2 text-muted-foreground"
+							onClick={() => setPapersOpen(true)}
+						>
+							<Plus className="size-4" />
+							{automation.papers.length > 0 ? "Add or edit" : "Add"}
+						</Button>
+					</div>
+					<p className="text-2xl font-semibold tabular-nums">
+						{automation.papers.length}
 					</p>
 				</div>
 			</div>
@@ -145,6 +173,14 @@ export default function AutomatePage(): React.JSX.Element {
 				open={youtubeOpen}
 				onOpenChange={setYoutubeOpen}
 				sources={automation.youtube}
+				testSource={automation.testSource}
+				addSource={automation.addSource}
+				removeSource={automation.removeSource}
+			/>
+			<PapersSourcesDialog
+				open={papersOpen}
+				onOpenChange={setPapersOpen}
+				sources={automation.papers}
 				testSource={automation.testSource}
 				addSource={automation.addSource}
 				removeSource={automation.removeSource}

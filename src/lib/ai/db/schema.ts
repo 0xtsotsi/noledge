@@ -64,9 +64,9 @@ export function migrate(db: Database): void {
 
 		CREATE TABLE IF NOT EXISTS automation_sources (
 			id              TEXT PRIMARY KEY,
-			type            TEXT NOT NULL,          -- 'rss' | 'youtube'
-			url             TEXT NOT NULL,          -- feed URL or channel URL/@handle (as entered)
-			identifier      TEXT,                   -- resolved: feed home / channelId (UC...)
+			type            TEXT NOT NULL,          -- 'rss' | 'youtube' | 'arxiv' | 'openalex' | 'pubmed' | 'biorxiv' | 'medrxiv'
+			url             TEXT NOT NULL,          -- feed/channel URL or paper query (e.g. 'cat:cs.AI', 'large language models')
+			identifier      TEXT,                   -- resolved channelId (UC...) or paper mode ('category' | 'keyword' | 'title')
 			title           TEXT,                   -- resolved feed/channel title
 			enabled         INTEGER NOT NULL DEFAULT 1,
 			created_at      INTEGER NOT NULL,
