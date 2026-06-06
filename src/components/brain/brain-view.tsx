@@ -42,7 +42,7 @@ export function BrainView(): React.JSX.Element {
 
 	if (!graph || graph.nodes.length === 0) {
 		return (
-			<div className="flex size-full flex-col items-center justify-center gap-2 bg-background text-center">
+			<div className="flex size-full animate-rise-in flex-col items-center justify-center gap-2 bg-background text-center">
 				<Brain className="size-8 text-muted-foreground" />
 				<p className="text-sm font-medium text-foreground">
 					The Brain is empty
@@ -55,8 +55,8 @@ export function BrainView(): React.JSX.Element {
 	}
 
 	return (
-		<div className="relative size-full overflow-hidden">
-			<div className="pointer-events-none absolute left-6 top-6 z-10">
+		<div className="relative size-full animate-fade-in overflow-hidden">
+			<div className="pointer-events-none absolute left-6 top-6 z-10 animate-rise-in">
 				<h1 className="text-lg font-semibold tracking-tight text-foreground">
 					The Brain
 				</h1>

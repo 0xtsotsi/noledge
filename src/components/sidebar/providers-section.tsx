@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type ProviderStatus = {
@@ -21,7 +22,6 @@ type ProviderStatus = {
 type DraftState = {
 	value: string;
 	saving: boolean;
-	error: string | null;
 };
 
 type OAuthState = {
@@ -34,11 +34,10 @@ type OAuthState = {
 	userCode?: string;
 	autoComplete: boolean;
 	saving: boolean;
-	error: string | null;
 };
 
 function emptyDraft(): DraftState {
-	return { value: "", saving: false, error: null };
+	return { value: "", saving: false };
 }
 
 export function ProvidersSection(): React.JSX.Element {
@@ -78,7 +77,7 @@ export function ProvidersSection(): React.JSX.Element {
 	const openEditor = useCallback(
 		(id: string): void => {
 			setEditing(id);
-			setDraft(id, { value: "", error: null });
+			setDraft(id, { value: "" });
 		},
 		[setDraft],
 	);
@@ -92,11 +91,11 @@ export function ProvidersSection(): React.JSX.Element {
 			const draft = drafts[id] ?? emptyDraft();
 			const apiKey = draft.value.trim();
 			if (apiKey.length === 0) {
-				setDraft(id, { error: "Enter an API key." });
+				notifyError(null, "Enter an API key.");
 				return;
 			}
 
-			setDraft(id, { saving: true, error: null });
+			setDraft(id, { saving: true });
 			try {
 				const response = await fetch("/api/providers", {
 					method: "POST",
@@ -114,18 +113,15 @@ export function ProvidersSection(): React.JSX.Element {
 						),
 					);
 					setEditing(null);
-					setDraft(id, { value: "", saving: false, error: null });
+					setDraft(id, { value: "", saving: false });
+					notifySuccess("Key saved.");
 				} else {
-					setDraft(id, {
-						saving: false,
-						error: data.error ?? "Could not validate key.",
-					});
+					setDraft(id, { saving: false });
+					notifyError(data.error, "Could not validate key.");
 				}
 			} catch (error) {
-				setDraft(id, {
-					saving: false,
-					error: error instanceof Error ? error.message : "Request failed.",
-				});
+				setDraft(id, { saving: false });
+				notifyError(error, "Request failed.");
 			}
 		},
 		[drafts, setDraft],
@@ -157,19 +153,10 @@ export function ProvidersSection(): React.JSX.Element {
 				  }
 				| { ok: false; error?: string };
 			if (!response.ok || !data.ok) {
-				setOauth({
-					provider: id,
-					stateId: "",
-					mode: "code",
-					url: "",
-					instructions: "",
-					code: "",
-					autoComplete: false,
-					saving: false,
-					error: data.ok
-						? "Could not start OAuth login."
-						: (data.error ?? "Could not start OAuth login."),
-				});
+				notifyError(
+					data.ok ? null : data.error,
+					"Could not start OAuth login.",
+				);
 				return;
 			}
 			const url =
@@ -190,29 +177,15 @@ export function ProvidersSection(): React.JSX.Element {
 				autoComplete,
 				...(data.mode === "device" ? { userCode: data.userCode } : {}),
 				saving: false,
-				error: null,
 			});
 		} catch (error) {
-			setOauth({
-				provider: id,
-				stateId: "",
-				mode: "code",
-				url: "",
-				instructions: "",
-				code: "",
-				autoComplete: false,
-				saving: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Could not start OAuth login.",
-			});
+			notifyError(error, "Could not start OAuth login.");
 		}
 	}, []);
 
 	const completeOAuth = useCallback(async (): Promise<void> => {
 		if (!oauth?.stateId) return;
-		setOauth((prev) => (prev ? { ...prev, saving: true, error: null } : prev));
+		setOauth((prev) => (prev ? { ...prev, saving: true } : prev));
 		try {
 			const response = await fetch("/api/providers/oauth/complete", {
 				method: "POST",
@@ -222,29 +195,15 @@ export function ProvidersSection(): React.JSX.Element {
 			const data = (await response.json()) as { ok?: boolean; error?: string };
 			if (response.ok && data.ok) {
 				setOauth(null);
+				notifySuccess("Provider connected.");
 				await load();
 				return;
 			}
-			setOauth((prev) =>
-				prev
-					? {
-							...prev,
-							saving: false,
-							error: data.error ?? "OAuth login failed.",
-						}
-					: prev,
-			);
+			setOauth((prev) => (prev ? { ...prev, saving: false } : prev));
+			notifyError(data.error, "OAuth login failed.");
 		} catch (error) {
-			setOauth((prev) =>
-				prev
-					? {
-							...prev,
-							saving: false,
-							error:
-								error instanceof Error ? error.message : "OAuth login failed.",
-						}
-					: prev,
-			);
+			setOauth((prev) => (prev ? { ...prev, saving: false } : prev));
+			notifyError(error, "OAuth login failed.");
 		}
 	}, [load, oauth]);
 
@@ -439,7 +398,6 @@ export function ProvidersSection(): React.JSX.Element {
 															? {
 																	...prev,
 																	code: event.target.value,
-																	error: null,
 																}
 															: prev,
 													)
@@ -474,9 +432,6 @@ export function ProvidersSection(): React.JSX.Element {
 												</Button>
 											)}
 										</div>
-										{oauth.error ? (
-											<p className="text-xs text-destructive">{oauth.error}</p>
-										) : null}
 									</div>
 								) : null}
 
@@ -492,7 +447,6 @@ export function ProvidersSection(): React.JSX.Element {
 												onChange={(event) =>
 													setDraft(provider.id, {
 														value: event.target.value,
-														error: null,
 													})
 												}
 												onKeyDown={(event) => {
@@ -526,9 +480,6 @@ export function ProvidersSection(): React.JSX.Element {
 												<X className="size-4" />
 											</Button>
 										</div>
-										{draft.error ? (
-											<p className="text-xs text-destructive">{draft.error}</p>
-										) : null}
 									</div>
 								) : null}
 							</li>

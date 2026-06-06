@@ -1,6 +1,7 @@
 "use client";
 
 import { IconContext } from "@phosphor-icons/react";
+import { MotionConfig } from "motion/react";
 import { Suspense } from "react";
 
 import {
@@ -24,18 +25,20 @@ export function AppShell({
 }): React.JSX.Element {
 	return (
 		<IconContext.Provider value={ICON_DEFAULTS}>
-			<SidebarProvider>
-				<Suspense fallback={null}>
-					<AppSidebar />
-				</Suspense>
-				<SidebarInset className="h-svh min-w-0">
-					<header className="flex h-12 shrink-0 items-center gap-2 border-b px-3 md:hidden">
-						<SidebarTrigger />
-						<span className="text-sm font-semibold">Noledge</span>
-					</header>
-					<div className="min-h-0 flex-1">{children}</div>
-				</SidebarInset>
-			</SidebarProvider>
+			<MotionConfig reducedMotion="user">
+				<SidebarProvider>
+					<Suspense fallback={null}>
+						<AppSidebar />
+					</Suspense>
+					<SidebarInset className="h-svh min-w-0">
+						<header className="flex h-12 shrink-0 items-center gap-2 border-b px-3 md:hidden">
+							<SidebarTrigger />
+							<span className="text-sm font-semibold">Noledge</span>
+						</header>
+						<div className="min-h-0 flex-1">{children}</div>
+					</SidebarInset>
+				</SidebarProvider>
+			</MotionConfig>
 		</IconContext.Provider>
 	);
 }

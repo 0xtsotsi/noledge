@@ -17,6 +17,7 @@ import type {
 	SourceType,
 	useAutomation,
 } from "@/hooks/use-automation";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { SourceList } from "./source-list";
 
@@ -91,12 +92,10 @@ export function PapersSourcesDialog({
 	const [value, setValue] = useState("");
 	const [testing, setTesting] = useState(false);
 	const [adding, setAdding] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	const [preview, setPreview] = useState<RssPreview | null>(null);
 
 	const reset = (): void => {
 		setValue("");
-		setError(null);
 		setPreview(null);
 	};
 
@@ -127,7 +126,6 @@ export function PapersSourcesDialog({
 
 	const test = async (): Promise<void> => {
 		setTesting(true);
-		setError(null);
 		setPreview(null);
 		const request = buildRequest();
 		const result = await testSource(
@@ -136,21 +134,22 @@ export function PapersSourcesDialog({
 			request.identifier,
 		);
 		if (result.ok) setPreview(result.value as RssPreview);
-		else setError(result.error);
+		else notifyError(result.error, "Could not load this source.");
 		setTesting(false);
 	};
 
 	const add = async (): Promise<void> => {
 		setAdding(true);
-		setError(null);
 		const request = buildRequest();
 		const result = await addSource(
 			request.type,
 			request.url,
 			request.identifier,
 		);
-		if (result.ok) reset();
-		else setError(result.error);
+		if (result.ok) {
+			notifySuccess("Source added.");
+			reset();
+		} else notifyError(result.error, "Could not add this source.");
 		setAdding(false);
 	};
 
@@ -184,7 +183,6 @@ export function PapersSourcesDialog({
 							onChange={(event) => {
 								setProvider(event.target.value as Provider);
 								setPreview(null);
-								setError(null);
 							}}
 							disabled={testing || adding}
 							aria-label="Provider"
@@ -252,8 +250,6 @@ export function PapersSourcesDialog({
 							Add
 						</Button>
 					</div>
-
-					{error ? <p className="text-xs text-destructive">{error}</p> : null}
 
 					{preview ? (
 						<div className="min-w-0 overflow-hidden rounded-lg border bg-muted/30 p-3 text-xs">

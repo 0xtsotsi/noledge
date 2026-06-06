@@ -27,6 +27,7 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type DocumentItem = {
@@ -254,9 +255,11 @@ export default function KnowledgePage(): React.JSX.Element {
 		async (id: string): Promise<void> => {
 			setDeleting(id);
 			try {
-				await fetch(`/api/documents?id=${encodeURIComponent(id)}`, {
-					method: "DELETE",
-				});
+				const response = await fetch(
+					`/api/documents?id=${encodeURIComponent(id)}`,
+					{ method: "DELETE" },
+				);
+				if (!response.ok) throw new Error("delete failed");
 				// Reload so counts and the page slice stay correct; step back a page
 				// if we just removed the last row on a non-first page.
 				const remaining = total - 1;
@@ -264,6 +267,9 @@ export default function KnowledgePage(): React.JSX.Element {
 				const nextPage = Math.min(page, lastPage);
 				if (nextPage === page) await load(page);
 				else setPage(nextPage);
+				notifySuccess("Document deleted.");
+			} catch {
+				notifyError(null, "Could not delete this document.");
 			} finally {
 				setDeleting(null);
 			}
@@ -290,7 +296,7 @@ export default function KnowledgePage(): React.JSX.Element {
 
 	return (
 		<div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 px-6 py-8">
-			<div className="flex items-end justify-between gap-4">
+			<div className="flex animate-rise-in items-end justify-between gap-4">
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">Knowledge</h1>
 					<p className="text-sm text-muted-foreground">
@@ -343,7 +349,7 @@ export default function KnowledgePage(): React.JSX.Element {
 					<CircleNotch className="size-6 animate-spin text-muted-foreground" />
 				</div>
 			) : isEmpty ? (
-				<div className="flex flex-1 flex-col items-center justify-center gap-1 py-16 text-center">
+				<div className="flex flex-1 animate-rise-in flex-col items-center justify-center gap-1 py-16 text-center">
 					<p className="text-sm font-medium">
 						{hasActiveFilter ? "No matching knowledge" : "No knowledge yet"}
 					</p>
@@ -354,7 +360,7 @@ export default function KnowledgePage(): React.JSX.Element {
 					</p>
 				</div>
 			) : (
-				<div className="overflow-hidden rounded-xl border">
+				<div className="animate-fade-in overflow-hidden rounded-xl border">
 					<table className="w-full table-fixed text-sm">
 						<thead>
 							<tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
@@ -394,16 +400,19 @@ export default function KnowledgePage(): React.JSX.Element {
 									onSort={updateSort}
 									className="w-32"
 								/>
-								<th className="w-12 px-4 py-2.5" />
+								<th className="w-16 py-2.5 pl-4 pr-6" />
 							</tr>
 						</thead>
 						<tbody>
-							{documents.map((doc) => {
+							{documents.map((doc, index) => {
 								const Icon = iconFor(doc);
 								return (
 									<tr
 										key={doc.id}
-										className="group border-b last:border-0 transition-colors hover:bg-accent/40"
+										className="group animate-rise-in border-b last:border-0 transition-colors hover:bg-accent/40"
+										style={{
+											animationDelay: `${Math.min(index * 35, 280)}ms`,
+										}}
 									>
 										<td className="px-4 py-3">
 											<div className="flex items-center gap-3">
@@ -428,7 +437,7 @@ export default function KnowledgePage(): React.JSX.Element {
 										<td className="px-4 py-3 text-muted-foreground">
 											{formatDate(doc.createdAt)}
 										</td>
-										<td className="px-4 py-3 text-right">
+										<td className="py-3 pl-4 pr-6 text-right">
 											<Button
 												variant="ghost"
 												size="icon"

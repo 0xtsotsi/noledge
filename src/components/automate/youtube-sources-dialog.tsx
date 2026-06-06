@@ -16,6 +16,7 @@ import type {
 	useAutomation,
 	YoutubePreview,
 } from "@/hooks/use-automation";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { SourceList } from "./source-list";
 
 type Api = ReturnType<typeof useAutomation>;
@@ -40,31 +41,29 @@ export function YoutubeSourcesDialog({
 	const [url, setUrl] = useState("");
 	const [testing, setTesting] = useState(false);
 	const [adding, setAdding] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	const [preview, setPreview] = useState<YoutubePreview | null>(null);
 
 	const resetAdd = (): void => {
 		setUrl("");
-		setError(null);
 		setPreview(null);
 	};
 
 	const test = async (): Promise<void> => {
 		setTesting(true);
-		setError(null);
 		setPreview(null);
 		const result = await testSource("youtube", url.trim());
 		if (result.ok) setPreview(result.value as YoutubePreview);
-		else setError(result.error);
+		else notifyError(result.error, "Could not load this channel.");
 		setTesting(false);
 	};
 
 	const add = async (): Promise<void> => {
 		setAdding(true);
-		setError(null);
 		const result = await addSource("youtube", url.trim());
-		if (result.ok) resetAdd();
-		else setError(result.error);
+		if (result.ok) {
+			notifySuccess("Channel added.");
+			resetAdd();
+		} else notifyError(result.error, "Could not add this channel.");
 		setAdding(false);
 	};
 
@@ -111,8 +110,6 @@ export function YoutubeSourcesDialog({
 							Add
 						</Button>
 					</div>
-
-					{error ? <p className="text-xs text-destructive">{error}</p> : null}
 
 					{preview ? (
 						<div className="rounded-lg border bg-muted/30 p-3 text-xs">

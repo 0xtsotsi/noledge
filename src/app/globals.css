@@ -152,6 +152,37 @@
 	animation: message-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Reusable entrance toolkit — quick, smooth, never delayed. `both` fill mode
+   keeps staggered items hidden until their delay elapses (no first-frame flash).
+   Pair with an inline `animation-delay` for staggered lists. */
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes rise-in {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@utility animate-fade-in {
+	animation: fade-in 0.25s ease-out both;
+}
+
+@utility animate-rise-in {
+	animation: rise-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @utility logo-shimmer {
 	background-image: linear-gradient(
 		110deg,

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/sidebar/app-shell";
+import { Toaster } from "@/components/ui/sonner";
 import { siteMetadata, siteViewport } from "@/lib/seo";
 import "./globals.css";
 
@@ -40,6 +41,7 @@ export default function RootLayout({
 				suppressHydrationWarning
 			>
 				<AppShell>{children}</AppShell>
+				<Toaster />
 			</body>
 		</html>
 	);

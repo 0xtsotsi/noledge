@@ -1,6 +1,7 @@
 "use client";
 
 import { Trash } from "@phosphor-icons/react";
+import { motion } from "motion/react";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -13,11 +14,8 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-	SidebarMenuAction,
-	SidebarMenuButton,
-	SidebarMenuItem,
-} from "@/components/ui/sidebar";
+import { SidebarMenuAction, SidebarMenuButton } from "@/components/ui/sidebar";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 export type ChatListItemData = {
@@ -74,18 +72,31 @@ export function ChatListItem({
 	async function confirmDelete(): Promise<void> {
 		setDeleting(true);
 		try {
-			await fetch(`/api/conversations/${chat.id}`, { method: "DELETE" });
+			const response = await fetch(`/api/conversations/${chat.id}`, {
+				method: "DELETE",
+			});
+			if (!response.ok) throw new Error("delete failed");
 			onDeleted(chat.id);
+			setConfirmOpen(false);
+			notifySuccess("Chat deleted.");
 		} catch {
-			/* leave dialog open on failure */
+			notifyError(null, "Could not delete this chat.");
 		} finally {
 			setDeleting(false);
-			setConfirmOpen(false);
 		}
 	}
 
 	return (
-		<SidebarMenuItem>
+		<motion.li
+			layout
+			data-slot="sidebar-menu-item"
+			data-sidebar="menu-item"
+			className="group/menu-item relative"
+			initial={{ opacity: 0, height: 0 }}
+			animate={{ opacity: 1, height: "auto" }}
+			exit={{ opacity: 0, height: 0 }}
+			transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+		>
 			{editing ? (
 				<div className="px-2 py-1">
 					<Input
@@ -118,7 +129,7 @@ export function ChatListItem({
 						>
 							<span
 								className={cn(
-									"truncate",
+									"truncate transition-colors duration-300",
 									streaming && "chat-shimmer",
 									!streaming && justFinished && "font-medium text-emerald-500",
 								)}
@@ -168,6 +179,6 @@ export function ChatListItem({
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</SidebarMenuItem>
+		</motion.li>
 	);
 }

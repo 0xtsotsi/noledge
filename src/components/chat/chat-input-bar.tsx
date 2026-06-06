@@ -8,6 +8,7 @@ import {
 	Square,
 	X,
 } from "@phosphor-icons/react";
+import { AnimatePresence, motion } from "motion/react";
 
 import {
 	FileUpload,
@@ -69,12 +70,13 @@ export function ChatInputBar({
 		<FileUpload onFilesAdded={onFilesAdded} accept={UPLOAD_ACCEPT}>
 			{suggestions.length > 0 ? (
 				<div className="mb-3 flex flex-wrap justify-center gap-2">
-					{suggestions.map((suggestion) => (
+					{suggestions.map((suggestion, index) => (
 						<PromptSuggestion
 							key={suggestion}
 							type="button"
 							size="sm"
-							className="h-auto max-w-full px-2.5 py-1.5 text-left text-[11px] sm:text-xs"
+							className="h-auto max-w-full animate-rise-in px-2.5 py-1.5 text-left text-[11px] sm:text-xs"
+							style={{ animationDelay: `${Math.min(index * 50, 300)}ms` }}
 							onClick={() => onValueChange(suggestion)}
 						>
 							{suggestion}
@@ -91,32 +93,39 @@ export function ChatInputBar({
 			>
 				{attachments.length > 0 ? (
 					<div className="flex flex-wrap gap-2 px-2 pt-1 pb-2">
-						{attachments.map((attachment) => (
-							<div
-								key={attachment.id}
-								className="group relative flex items-center gap-2 rounded-lg border bg-secondary py-1.5 pr-7 pl-2 text-sm"
-							>
-								{attachment.type.startsWith("image/") ? (
-									// biome-ignore lint/performance/noImgElement: local object URL preview
-									<img
-										src={attachment.url}
-										alt={attachment.name}
-										className="size-8 rounded object-cover"
-									/>
-								) : (
-									<FileText className="size-4 shrink-0" />
-								)}
-								<span className="max-w-32 truncate">{attachment.name}</span>
-								<button
-									type="button"
-									onClick={() => onRemoveAttachment(attachment.id)}
-									className="absolute top-1 right-1 rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
-									aria-label={`Remove ${attachment.name}`}
+						<AnimatePresence initial={false}>
+							{attachments.map((attachment) => (
+								<motion.div
+									key={attachment.id}
+									layout
+									initial={{ opacity: 0, scale: 0.85 }}
+									animate={{ opacity: 1, scale: 1 }}
+									exit={{ opacity: 0, scale: 0.85 }}
+									transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+									className="group relative flex items-center gap-2 rounded-lg border bg-secondary py-1.5 pr-7 pl-2 text-sm"
 								>
-									<X className="size-3.5" />
-								</button>
-							</div>
-						))}
+									{attachment.type.startsWith("image/") ? (
+										// biome-ignore lint/performance/noImgElement: local object URL preview
+										<img
+											src={attachment.url}
+											alt={attachment.name}
+											className="size-8 rounded object-cover"
+										/>
+									) : (
+										<FileText className="size-4 shrink-0" />
+									)}
+									<span className="max-w-32 truncate">{attachment.name}</span>
+									<button
+										type="button"
+										onClick={() => onRemoveAttachment(attachment.id)}
+										className="absolute top-1 right-1 rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+										aria-label={`Remove ${attachment.name}`}
+									>
+										<X className="size-3.5" />
+									</button>
+								</motion.div>
+							))}
+						</AnimatePresence>
 					</div>
 				) : null}
 

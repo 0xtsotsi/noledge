@@ -22,6 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { usePromptSuggestions } from "@/hooks/use-prompt-suggestions";
 import { type Theme, useTheme } from "@/hooks/use-theme";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { ProvidersSection } from "./providers-section";
 
@@ -85,8 +86,6 @@ export function SettingsDialog({
 	const [responseStyle, setResponseStyle] =
 		useState<ResponseStyleValue>("default");
 	const [agentSaving, setAgentSaving] = useState(false);
-	const [agentError, setAgentError] = useState<string | null>(null);
-	const [agentSaved, setAgentSaved] = useState(false);
 
 	// Honor the requested tab each time the dialog is opened.
 	useEffect(() => {
@@ -102,7 +101,6 @@ export function SettingsDialog({
 
 		let cancelled = false;
 		async function loadAgentPrompt(): Promise<void> {
-			setAgentError(null);
 			try {
 				const response = await fetch("/api/settings/agent");
 				const data = (await response.json()) as {
@@ -119,14 +117,9 @@ export function SettingsDialog({
 					setDefaultAgentPrompt(data.defaultSystemPrompt ?? "");
 					setAboutUser(data.aboutUser ?? "");
 					setResponseStyle(normalizeResponseStyle(data.responseStyle));
-					setAgentSaved(false);
 				}
 			} catch (error) {
-				if (!cancelled) {
-					setAgentError(
-						error instanceof Error ? error.message : "Could not load prompt.",
-					);
-				}
+				if (!cancelled) notifyError(error, "Could not load prompt.");
 			}
 		}
 
@@ -138,8 +131,6 @@ export function SettingsDialog({
 
 	async function saveAgentSettings(nextPrompt: string | null): Promise<void> {
 		setAgentSaving(true);
-		setAgentError(null);
-		setAgentSaved(false);
 		try {
 			const response = await fetch("/api/settings/agent", {
 				method: "PUT",
@@ -163,11 +154,9 @@ export function SettingsDialog({
 			setDefaultAgentPrompt(data.defaultSystemPrompt ?? "");
 			setAboutUser(data.aboutUser ?? "");
 			setResponseStyle(normalizeResponseStyle(data.responseStyle));
-			setAgentSaved(true);
+			notifySuccess("Saved. Future responses will use these settings.");
 		} catch (error) {
-			setAgentError(
-				error instanceof Error ? error.message : "Could not save settings.",
-			);
+			notifyError(error, "Could not save settings.");
 		} finally {
 			setAgentSaving(false);
 		}
@@ -207,7 +196,7 @@ export function SettingsDialog({
 					<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 						<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
 							{activeTab === "general" && (
-								<div className="p-6">
+								<div className="animate-fade-in p-6">
 									<h2 className="mb-6 text-lg font-semibold">General</h2>
 									<div className="space-y-0">
 										<div className="flex items-center justify-between py-4">
@@ -284,14 +273,14 @@ export function SettingsDialog({
 							)}
 
 							{activeTab === "providers" && (
-								<div className="p-6">
+								<div className="animate-fade-in p-6">
 									<h2 className="mb-6 text-lg font-semibold">Providers</h2>
 									<ProvidersSection />
 								</div>
 							)}
 
 							{activeTab === "agent" && (
-								<div className="p-6">
+								<div className="animate-fade-in p-6">
 									<h2 className="mb-6 text-lg font-semibold">Agent</h2>
 									<div className="space-y-4">
 										<div className="space-y-1">
@@ -305,8 +294,6 @@ export function SettingsDialog({
 											value={agentPrompt}
 											onChange={(event) => {
 												setAgentPrompt(event.target.value);
-												setAgentSaved(false);
-												setAgentError(null);
 											}}
 											className="min-h-[280px] resize-y font-mono text-xs leading-relaxed"
 											placeholder="You are noledge..."
@@ -326,8 +313,6 @@ export function SettingsDialog({
 												value={aboutUser}
 												onChange={(event) => {
 													setAboutUser(event.target.value);
-													setAgentSaved(false);
-													setAgentError(null);
 												}}
 												className="min-h-28 resize-y text-sm"
 												placeholder={[
@@ -353,8 +338,6 @@ export function SettingsDialog({
 														setResponseStyle(
 															event.target.value as ResponseStyleValue,
 														);
-														setAgentSaved(false);
-														setAgentError(null);
 													}}
 													className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 												>
@@ -367,37 +350,26 @@ export function SettingsDialog({
 												<CaretDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-muted-foreground" />
 											</div>
 										</div>
-										<div className="flex items-center justify-between gap-3">
-											<div className="min-h-4 text-xs">
-												{agentError ? (
-													<span className="text-destructive">{agentError}</span>
-												) : agentSaved ? (
-													<span className="text-emerald-600 dark:text-emerald-400">
-														Saved. Future responses will use these settings.
-													</span>
-												) : null}
-											</div>
-											<div className="flex justify-end gap-2">
-												<Button
-													variant="outline"
-													size="sm"
-													type="button"
-													disabled={agentSaving}
-													onClick={() => void saveAgentSettings(null)}
-												>
-													Reset default
-												</Button>
-												<Button
-													size="sm"
-													type="button"
-													disabled={
-														agentSaving || agentPrompt.trim().length === 0
-													}
-													onClick={() => void saveAgentSettings(agentPrompt)}
-												>
-													Save settings
-												</Button>
-											</div>
+										<div className="flex justify-end gap-2">
+											<Button
+												variant="outline"
+												size="sm"
+												type="button"
+												disabled={agentSaving}
+												onClick={() => void saveAgentSettings(null)}
+											>
+												Reset default
+											</Button>
+											<Button
+												size="sm"
+												type="button"
+												disabled={
+													agentSaving || agentPrompt.trim().length === 0
+												}
+												onClick={() => void saveAgentSettings(agentPrompt)}
+											>
+												Save settings
+											</Button>
 										</div>
 										{defaultAgentPrompt &&
 										agentPrompt !== defaultAgentPrompt ? (

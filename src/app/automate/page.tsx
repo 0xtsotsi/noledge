@@ -15,6 +15,7 @@ import { ScheduleCard } from "@/components/automate/schedule-card";
 import { YoutubeSourcesDialog } from "@/components/automate/youtube-sources-dialog";
 import { Button } from "@/components/ui/button";
 import { type PollSummary, useAutomation } from "@/hooks/use-automation";
+import { notifyError, notifySuccess } from "@/lib/toast";
 
 function formatRelative(ms: number | null): string {
 	if (ms === null) return "never";
@@ -32,19 +33,17 @@ export default function AutomatePage(): React.JSX.Element {
 	const [youtubeOpen, setYoutubeOpen] = useState(false);
 	const [papersOpen, setPapersOpen] = useState(false);
 	const [syncing, setSyncing] = useState(false);
-	const [syncResult, setSyncResult] = useState<string | null>(null);
 
 	const sync = async (): Promise<void> => {
 		setSyncing(true);
-		setSyncResult(null);
 		const result = await automation.syncNow();
 		if (result.ok) {
 			const s: PollSummary = result.value;
-			setSyncResult(
+			notifySuccess(
 				`Added ${s.added}, skipped ${s.skipped}${s.errors > 0 ? `, ${s.errors} error(s)` : ""}.`,
 			);
 		} else {
-			setSyncResult(result.error);
+			notifyError(result.error, "Sync failed.");
 		}
 		setSyncing(false);
 	};
@@ -59,7 +58,7 @@ export default function AutomatePage(): React.JSX.Element {
 
 	return (
 		<div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 px-6 py-8">
-			<div className="flex items-end justify-between gap-4">
+			<div className="flex animate-rise-in items-end justify-between gap-4">
 				<div>
 					<h1 className="text-2xl font-semibold tracking-tight">Automate</h1>
 					<p className="text-sm text-muted-foreground">
@@ -85,19 +84,18 @@ export default function AutomatePage(): React.JSX.Element {
 				</div>
 			</div>
 
-			{syncResult ? (
-				<div className="rounded-lg border bg-muted/30 px-4 py-2.5 text-sm">
-					{syncResult}
-				</div>
-			) : null}
-
-			<ScheduleCard
-				config={automation.config}
-				onSave={automation.saveSchedule}
-			/>
+			<div className="animate-rise-in" style={{ animationDelay: "40ms" }}>
+				<ScheduleCard
+					config={automation.config}
+					onSave={automation.saveSchedule}
+				/>
+			</div>
 
 			<div className="grid gap-4 sm:grid-cols-2">
-				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
+				<div
+					className="relative flex animate-rise-in flex-col gap-2 rounded-xl border p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md"
+					style={{ animationDelay: "80ms" }}
+				>
 					<div className="flex items-center justify-between gap-2">
 						<div className="flex items-center gap-2">
 							<Rss className="size-4 text-muted-foreground" />
@@ -118,7 +116,10 @@ export default function AutomatePage(): React.JSX.Element {
 					</p>
 				</div>
 
-				<div className="relative flex flex-col gap-2 rounded-xl border p-5 opacity-50 pointer-events-none">
+				<div
+					className="relative flex animate-rise-in flex-col gap-2 rounded-xl border p-5 opacity-50 pointer-events-none"
+					style={{ animationDelay: "120ms" }}
+				>
 					<div className="flex items-center justify-between gap-2">
 						<div className="flex items-center gap-2">
 							<MonitorPlay className="size-4 text-muted-foreground" />
@@ -142,7 +143,10 @@ export default function AutomatePage(): React.JSX.Element {
 					</p>
 				</div>
 
-				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
+				<div
+					className="relative flex animate-rise-in flex-col gap-2 rounded-xl border p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md"
+					style={{ animationDelay: "160ms" }}
+				>
 					<div className="flex items-center justify-between gap-2">
 						<div className="flex items-center gap-2">
 							<GraduationCap className="size-4 text-muted-foreground" />

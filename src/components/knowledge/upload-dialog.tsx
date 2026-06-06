@@ -19,6 +19,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { notifyError, notifySuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 type PendingStatus = "pending" | "uploading" | "done" | "duplicate" | "error";
@@ -99,6 +100,8 @@ export function UploadDialog({
 
 		setBusy(true);
 		let anyOk = false;
+		let added = 0;
+		let failed = 0;
 
 		for (const item of queue) {
 			setStatus(item.id, { status: "uploading", error: undefined });
@@ -112,14 +115,17 @@ export function UploadDialog({
 				if (response.ok) {
 					anyOk = true;
 					const data = (await response.json()) as { duplicate?: boolean };
+					if (!data.duplicate) added += 1;
 					setStatus(item.id, {
 						status: data.duplicate ? "duplicate" : "done",
 					});
 				} else {
+					failed += 1;
 					const data = (await response.json()) as { error?: string };
 					setStatus(item.id, { status: "error", error: data.error });
 				}
 			} catch (error) {
+				failed += 1;
 				setStatus(item.id, {
 					status: "error",
 					error: error instanceof Error ? error.message : "Upload failed",
@@ -128,6 +134,17 @@ export function UploadDialog({
 		}
 
 		setBusy(false);
+		if (added > 0) {
+			notifySuccess(
+				`Added ${added} file${added === 1 ? "" : "s"} to your knowledge base.`,
+			);
+		}
+		if (failed > 0) {
+			notifyError(
+				null,
+				`${failed} file${failed === 1 ? "" : "s"} couldn't be uploaded.`,
+			);
+		}
 		if (anyOk) onUploaded();
 	}, [files, onUploaded, setStatus]);
 

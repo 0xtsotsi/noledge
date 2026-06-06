@@ -1,6 +1,7 @@
 "use client";
 
 import { Gear, Plus } from "@phosphor-icons/react";
+import { AnimatePresence } from "motion/react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -212,26 +213,28 @@ export function AppSidebar(): React.JSX.Element {
 									</SidebarMenuButton>
 								</SidebarMenuItem>
 							) : (
-								conversations.map((session) => (
-									<ChatListItem
-										key={session.id}
-										chat={session}
-										isActive={activeChatId === session.id}
-										streaming={streamingIds.has(session.id)}
-										justFinished={unseenDoneIds.has(session.id)}
-										onRenamed={(id, title) =>
-											setConversations((prev) =>
-												prev.map((c) => (c.id === id ? { ...c, title } : c)),
-											)
-										}
-										onDeleted={(id) => {
-											setConversations((prev) =>
-												prev.filter((c) => c.id !== id),
-											);
-											if (activeChatId === id) router.replace("/");
-										}}
-									/>
-								))
+								<AnimatePresence initial={false}>
+									{conversations.map((session) => (
+										<ChatListItem
+											key={session.id}
+											chat={session}
+											isActive={activeChatId === session.id}
+											streaming={streamingIds.has(session.id)}
+											justFinished={unseenDoneIds.has(session.id)}
+											onRenamed={(id, title) =>
+												setConversations((prev) =>
+													prev.map((c) => (c.id === id ? { ...c, title } : c)),
+												)
+											}
+											onDeleted={(id) => {
+												setConversations((prev) =>
+													prev.filter((c) => c.id !== id),
+												);
+												if (activeChatId === id) router.replace("/");
+											}}
+										/>
+									))}
+								</AnimatePresence>
 							)}
 						</SidebarMenu>
 					</SidebarGroupContent>

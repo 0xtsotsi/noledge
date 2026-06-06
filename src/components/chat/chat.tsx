@@ -14,6 +14,7 @@ import type {
 	ChatMessage as ApiMessage,
 	ChatStreamChunk,
 } from "@/lib/ai/chat/sse";
+import { notifyError } from "@/lib/toast";
 import { ChatInputBar } from "./chat-input-bar";
 import { ChatMessage } from "./chat-message";
 import type { Attachment, ChatStatus, UiMessage } from "./types";
@@ -516,7 +517,8 @@ export function Chat(): React.JSX.Element {
 	const onFilesAdded = useCallback((files: File[]): void => {
 		for (const file of files) {
 			if (file.size > MAX_ATTACHMENT_BYTES) {
-				window.alert(
+				notifyError(
+					null,
 					`"${file.name}" is too large (max ${Math.floor(
 						MAX_ATTACHMENT_BYTES / (1024 * 1024),
 					)} MB).`,
@@ -534,6 +536,7 @@ export function Chat(): React.JSX.Element {
 				})
 				.catch(() => {
 					URL.revokeObjectURL(url);
+					notifyError(null, `Could not read "${file.name}".`);
 				});
 		}
 	}, []);
@@ -572,7 +575,7 @@ export function Chat(): React.JSX.Element {
 		const noProviders = hasModels === false;
 		return (
 			<div className="flex h-full flex-col items-center justify-center px-4">
-				<div className="w-full max-w-2xl space-y-6">
+				<div className="w-full max-w-2xl animate-rise-in space-y-6">
 					{noProviders ? (
 						<div className="flex flex-col items-center gap-4 text-center">
 							<h1 className="text-2xl font-semibold tracking-tight">

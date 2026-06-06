@@ -3,6 +3,7 @@
 import { CircleNotch } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import type { AutomationConfigState } from "@/hooks/use-automation";
+import { notifyError } from "@/lib/toast";
 import { HourSelect, type HourValue } from "./hour-select";
 
 type ScheduleCardProps = {
@@ -27,7 +28,6 @@ export function ScheduleCard({
 }: ScheduleCardProps): React.JSX.Element {
 	const [hour, setHour] = useState<HourValue>(config.scheduleHour);
 	const [saving, setSaving] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	const persistedTz = useRef(config.timezone);
 
 	// Auto-detect + persist the timezone on mount when not already stored.
@@ -42,10 +42,9 @@ export function ScheduleCard({
 	const changeHour = async (next: HourValue): Promise<void> => {
 		setHour(next);
 		setSaving(true);
-		setError(null);
 		const result = await onSave(next, persistedTz.current ?? detectTimezone());
 		if (!result.ok) {
-			setError(result.error);
+			notifyError(result.error, "Could not save schedule.");
 			setHour(config.scheduleHour);
 		}
 		setSaving(false);
@@ -72,8 +71,6 @@ export function ScheduleCard({
 					<CircleNotch className="size-4 animate-spin text-muted-foreground" />
 				) : null}
 			</div>
-
-			{error ? <p className="mt-3 text-xs text-destructive">{error}</p> : null}
 		</div>
 	);
 }
