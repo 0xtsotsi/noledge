@@ -120,7 +120,7 @@ export function RssSourcesDialog({
 							<p className="text-muted-foreground">
 								{preview.itemCount} items · latest:
 							</p>
-							<ul className="mt-1 list-disc pl-4 text-muted-foreground">
+							<ul className="mt-1 list-inside list-disc text-muted-foreground">
 								{preview.latestTitles.map((title) => (
 									<li key={title} className="truncate">
 										{title}

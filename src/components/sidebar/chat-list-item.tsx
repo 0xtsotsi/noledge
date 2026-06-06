@@ -3,7 +3,6 @@
 import { Trash } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useState } from "react";
-
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -19,6 +18,7 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
 
 export type ChatListItemData = {
 	id: string;
@@ -28,6 +28,10 @@ export type ChatListItemData = {
 type ChatListItemProps = {
 	chat: ChatListItemData;
 	isActive: boolean;
+	/** Response is currently streaming — shimmer the title. */
+	streaming?: boolean;
+	/** Finished while not open — show the title in green until opened. */
+	justFinished?: boolean;
 	onRenamed: (id: string, title: string) => void;
 	onDeleted: (id: string) => void;
 };
@@ -35,6 +39,8 @@ type ChatListItemProps = {
 export function ChatListItem({
 	chat,
 	isActive,
+	streaming = false,
+	justFinished = false,
 	onRenamed,
 	onDeleted,
 }: ChatListItemProps): React.JSX.Element {
@@ -110,7 +116,15 @@ export function ChatListItem({
 								beginEdit();
 							}}
 						>
-							<span className="truncate">{chat.title}</span>
+							<span
+								className={cn(
+									"truncate",
+									streaming && "chat-shimmer",
+									!streaming && justFinished && "font-medium text-emerald-500",
+								)}
+							>
+								{chat.title}
+							</span>
 						</Link>
 					</SidebarMenuButton>
 					<SidebarMenuAction

@@ -37,6 +37,15 @@ export function AppSidebar(): React.JSX.Element {
 	const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
 	const [conversations, setConversations] = useState<Conversation[]>([]);
 	const [loading, setLoading] = useState(true);
+	// Conversations whose response is currently streaming (show a shimmer).
+	const [streamingIds, setStreamingIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	// Conversations that finished while the user was looking elsewhere (show the
+	// title in green until opened).
+	const [unseenDoneIds, setUnseenDoneIds] = useState<Set<string>>(
+		() => new Set(),
+	);
 
 	const load = useCallback(async (): Promise<void> => {
 		try {
@@ -65,6 +74,68 @@ export function AppSidebar(): React.JSX.Element {
 			window.removeEventListener("conversations:changed", handler);
 		};
 	}, [load]);
+
+	// Track per-conversation streaming lifecycle dispatched by the chat view.
+	useEffect(() => {
+		const handler = (event: Event): void => {
+			const detail = (
+				event as CustomEvent<{
+					id?: string;
+					streaming?: boolean;
+					done?: boolean;
+				}>
+			).detail;
+			const id = detail?.id;
+			if (!id) return;
+
+			if (detail.streaming) {
+				setStreamingIds((prev) => {
+					const next = new Set(prev);
+					next.add(id);
+					return next;
+				});
+				// Re-streaming clears any stale "freshly done" highlight.
+				setUnseenDoneIds((prev) => {
+					if (!prev.has(id)) return prev;
+					const next = new Set(prev);
+					next.delete(id);
+					return next;
+				});
+				return;
+			}
+
+			setStreamingIds((prev) => {
+				if (!prev.has(id)) return prev;
+				const next = new Set(prev);
+				next.delete(id);
+				return next;
+			});
+			// Highlight green only if it finished while not currently open.
+			if (detail.done && id !== activeChatId) {
+				setUnseenDoneIds((prev) => {
+					if (prev.has(id)) return prev;
+					const next = new Set(prev);
+					next.add(id);
+					return next;
+				});
+			}
+		};
+		window.addEventListener("conversation:stream", handler);
+		return () => {
+			window.removeEventListener("conversation:stream", handler);
+		};
+	}, [activeChatId]);
+
+	// Opening a freshly finished conversation clears its green highlight.
+	useEffect(() => {
+		if (!activeChatId) return;
+		setUnseenDoneIds((prev) => {
+			if (!prev.has(activeChatId)) return prev;
+			const next = new Set(prev);
+			next.delete(activeChatId);
+			return next;
+		});
+	}, [activeChatId]);
 
 	// Allow other views (e.g. Automate) to open Settings on a specific tab.
 	useEffect(() => {
@@ -146,6 +217,8 @@ export function AppSidebar(): React.JSX.Element {
 										key={session.id}
 										chat={session}
 										isActive={activeChatId === session.id}
+										streaming={streamingIds.has(session.id)}
+										justFinished={unseenDoneIds.has(session.id)}
 										onRenamed={(id, title) =>
 											setConversations((prev) =>
 												prev.map((c) => (c.id === id ? { ...c, title } : c)),

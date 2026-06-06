@@ -49,3 +49,6 @@ next-env.d.ts
 
 # noledge local data (sqlite vector store)
 /.data/
+
+# youtube transcript cache
+/.cache/

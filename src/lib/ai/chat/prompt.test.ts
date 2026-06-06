@@ -40,7 +40,7 @@ describe("buildToolSystemPrompt", () => {
 		);
 		expect(prompt).toHaveLength(2);
 		expect(prompt[0]?.content).toContain("searchKnowledge");
-		expect(prompt[0]?.content).toContain("Memory and context");
+		expect(prompt[0]?.content).toContain("brain-first");
 		expect(prompt[0]?.providerOptions).toEqual({
 			anthropic: { cacheControl: { type: "ephemeral" } },
 		});

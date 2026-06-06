@@ -1,226 +1,137 @@
-import type { Innertube } from "youtubei.js";
-import { getYoutubeClient } from "./client";
+import {
+	type FetchParams,
+	FsCache,
+	type TranscriptSegment,
+	fetchTranscript as ytFetchTranscript,
+} from "youtube-transcript-plus";
+import { fetchTranscriptViaYtdlp } from "./ytdlp";
 
 /**
- * YouTube transcript fetcher built on the unofficial InnerTube client
- * (LuanRT/YouTube.js). Captions for videos you don't own can't come from the
- * official API (`captions.download` needs OAuth ownership), so we read the
- * caption-track list off the player response (`getInfo().captions`) and fetch the
- * `timedtext` track directly as json3.
+ * YouTube transcript fetcher. Two independent paths, both avoiding the
+ * unreliable `info.getTranscript()` endpoint (YouTube.js #1102):
  *
- * We deliberately do NOT use `info.getTranscript()` — its `get_transcript`
- * endpoint currently returns intermittent 400s (YouTube.js issue #1102). Reading
- * the caption track URL straight from the player response avoids that endpoint.
+ *  1. `youtube-transcript-plus` — uses the ANDROID InnerTube client for
+ *     caption tracks, with built-in retry + exponential backoff for 429s and
+ *     filesystem caching so repeat requests are instant.
+ *  2. yt-dlp — shells out to the yt-dlp binary as a fallback.
  *
- * This path is inherently brittle (no captions, age/region gating, cloud-IP
- * blocking, rate limits, format drift), so every failure is reported as a
- * **skip with a reason** rather than thrown. The module is swappable: a paid
- * transcript API could replace {@link fetchTranscript} without touching the poller.
+ * Both paths hit YouTube's `timedtext` endpoint for the actual transcript
+ * data, which is subject to IP-level 429s. The filesystem cache on path 1
+ * means a video only needs to succeed once; subsequent requests are served
+ * from disk.
+ *
+ * Set `HTTPS_PROXY` or `HTTP_PROXY` to route requests through a proxy,
+ * which bypasses IP-level rate limits.
+ *
+ * Every failure is reported as a **skip with a reason** rather than thrown.
+ * The module is swappable: a paid transcript API could replace
+ * {@link fetchTranscript} without touching the poller.
  */
 
 export type TranscriptResult =
 	| { ok: true; text: string }
 	| { ok: false; skipped: true; reason: string };
 
-type CaptionTrack = {
-	base_url: string;
-	language_code: string;
-	kind?: string;
-};
+/** Filesystem cache for transcripts — persists across restarts. */
+const transcriptCache = new FsCache(
+	".cache/youtube-transcripts",
+	7 * 86_400_000,
+); // 7 days
 
-type Json3Response = {
-	events?: { segs?: { utf8?: string }[] }[];
-};
-
-type VideoInfo = Awaited<ReturnType<Innertube["getInfo"]>>;
-
-/** Pick the best caption track: prefer the requested language, else any. */
-function pickTrack(
-	tracks: CaptionTrack[],
-	preferredLang: string,
-): CaptionTrack | undefined {
-	const withUrl = tracks.filter((track) => Boolean(track.base_url));
-	if (withUrl.length === 0) return undefined;
-	const exact = withUrl.find(
-		(track) => track.language_code?.toLowerCase() === preferredLang,
+/** Resolve proxy URL from environment, if set. */
+function proxyUrl(): string | undefined {
+	return (
+		process.env.HTTPS_PROXY ??
+		process.env.HTTP_PROXY ??
+		process.env.https_proxy ??
+		process.env.http_proxy
 	);
-	if (exact) return exact;
-	const prefix = withUrl.find((track) =>
-		track.language_code?.toLowerCase().startsWith(preferredLang),
-	);
-	return prefix ?? withUrl[0];
 }
 
-function normalizeTranscriptLine(value: string): string {
-	return value.replace(/\s+/g, " ").trim();
+function segmentsToText(segments: TranscriptSegment[]): string {
+	return segments
+		.map((seg) => seg.text.replace(/\s+/g, " ").trim())
+		.filter((line) => line.length > 0)
+		.join("\n");
 }
 
-/** Flatten a json3 caption document into plain transcript text. */
-function json3ToText(doc: Json3Response): string {
-	const lines: string[] = [];
-	for (const event of doc.events ?? []) {
-		if (!event.segs) continue;
-		const line = normalizeTranscriptLine(
-			event.segs.map((seg) => seg.utf8 ?? "").join(""),
-		);
-		if (line.length > 0) lines.push(line);
-	}
-	return lines.join("\n");
-}
+/**
+ * Build a proxy-dispatching fetch if `HTTPS_PROXY` / `HTTP_PROXY` is set.
+ * Returns `undefined` when no proxy is configured (library uses default fetch).
+ */
+async function proxyFetch(): Promise<
+	| {
+			videoFetch: (params: FetchParams) => Promise<Response>;
+			playerFetch: (params: FetchParams) => Promise<Response>;
+			transcriptFetch: (params: FetchParams) => Promise<Response>;
+	  }
+	| undefined
+> {
+	const proxy = proxyUrl();
+	if (!proxy) return undefined;
 
-function languageAliases(language: string): string[] {
-	if (language === "en") return ["english", "english (auto-generated)"];
-	return [language];
-}
+	const { ProxyAgent, fetch: undiciFetch } = await import("undici");
+	const agent = new ProxyAgent(proxy);
 
-async function fetchInnerTubeTranscript(
-	info: VideoInfo,
-	language: string,
-): Promise<TranscriptResult> {
-	try {
-		let transcriptInfo = await info.getTranscript();
-		const languageItems =
-			transcriptInfo.transcript?.content?.footer?.language_menu
-				?.sub_menu_items ?? [];
-		const aliases = languageAliases(language);
-		const selectedLanguage = languageItems.find((item) => {
-			const title = item.title.toString().toLowerCase();
-			return aliases.some(
-				(alias) => title === alias || title.startsWith(`${alias} `),
-			);
-		});
+	const proxyFetchFn = async (params: FetchParams): Promise<Response> => {
+		return undiciFetch(params.url, {
+			method: (params.method ?? "GET") as "GET" | "POST",
+			headers: {
+				...params.headers,
+				...(params.lang && { "Accept-Language": params.lang }),
+				...(params.userAgent && { "User-Agent": params.userAgent }),
+			},
+			body: params.body,
+			signal: params.signal,
+			dispatcher: agent,
+		}) as unknown as Promise<Response>;
+	};
 
-		if (
-			selectedLanguage &&
-			!selectedLanguage.selected &&
-			transcriptInfo.selectLanguage
-		) {
-			transcriptInfo = await transcriptInfo.selectLanguage(
-				selectedLanguage.title.toString(),
-			);
-		}
-
-		const segments =
-			transcriptInfo.transcript?.content?.body?.initial_segments ?? [];
-		const text = segments
-			.map((segment) =>
-				normalizeTranscriptLine(segment.snippet?.toString() ?? ""),
-			)
-			.filter((line) => line.length > 0)
-			.join("\n");
-
-		if (text.trim().length === 0) {
-			return { ok: false, skipped: true, reason: "Transcript was empty." };
-		}
-		return { ok: true, text };
-	} catch (error) {
-		return {
-			ok: false,
-			skipped: true,
-			reason:
-				error instanceof Error
-					? `InnerTube transcript fallback failed: ${error.message}`
-					: "InnerTube transcript fallback failed.",
-		};
-	}
+	return {
+		videoFetch: proxyFetchFn,
+		playerFetch: proxyFetchFn,
+		transcriptFetch: proxyFetchFn,
+	};
 }
 
 /**
  * Fetch a transcript for `videoId`. Returns the joined caption text, or a skip
  * with a human-readable reason when captions are unavailable or YouTube blocks
  * the request. Never throws on network/format failures.
+ *
+ * Fetch order:
+ *  1. youtube-transcript-plus (ANDROID client, retry, filesystem cache)
+ *  2. yt-dlp (shells out, no caching)
  */
 export async function fetchTranscript(
 	videoId: string,
-	options: { client?: Innertube; language?: string } = {},
+	options: { language?: string } = {},
 ): Promise<TranscriptResult> {
-	const language = (options.language ?? "en").toLowerCase();
+	const lang = options.language ?? "en";
+	const proxy = await proxyFetch();
 
-	let yt: Innertube;
+	// 1. Primary: youtube-transcript-plus with retry + cache.
 	try {
-		yt = options.client ?? (await getYoutubeClient());
-	} catch (error) {
-		return {
-			ok: false,
-			skipped: true,
-			reason:
-				error instanceof Error
-					? `Transcript client unavailable: ${error.message}`
-					: "Transcript client unavailable.",
-		};
-	}
-
-	let info: VideoInfo;
-	let tracks: CaptionTrack[];
-	try {
-		info = await yt.getInfo(videoId);
-		tracks = info.captions?.caption_tracks ?? [];
-	} catch (error) {
-		return {
-			ok: false,
-			skipped: true,
-			reason:
-				error instanceof Error
-					? `Could not load video: ${error.message}`
-					: "Could not load video.",
-		};
-	}
-
-	const track = pickTrack(tracks, language);
-	if (!track) {
-		return fetchInnerTubeTranscript(info, language);
-	}
-
-	// Append fmt=json3 for structured caption events.
-	const url = track.base_url.includes("fmt=")
-		? track.base_url
-		: `${track.base_url}&fmt=json3`;
-
-	try {
-		const response = await fetch(url, {
-			headers: {
-				Accept: "application/json,text/plain,*/*",
-				"User-Agent":
-					"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-			},
+		const segments = await ytFetchTranscript(videoId, {
+			lang,
+			retries: 3,
+			retryDelay: 2000,
+			cache: transcriptCache,
+			...proxy,
 		});
-		if (!response.ok) {
-			const fallback = await fetchInnerTubeTranscript(info, language);
-			if (fallback.ok) return fallback;
-			return {
-				ok: false,
-				skipped: true,
-				reason: `Caption track returned ${response.status}; ${fallback.reason}`,
-			};
-		}
-		const body = await response.text();
-		if (body.trim().length === 0) {
-			const fallback = await fetchInnerTubeTranscript(info, language);
-			if (fallback.ok) return fallback;
-			// Empty body is the classic PO-token / IP-block symptom.
-			return {
-				ok: false,
-				skipped: true,
-				reason: `Caption track returned empty (likely blocked or gated); ${fallback.reason}`,
-			};
-		}
-		const text = json3ToText(JSON.parse(body) as Json3Response);
+		const text = segmentsToText(segments);
 		if (text.trim().length === 0) {
-			const fallback = await fetchInnerTubeTranscript(info, language);
-			if (fallback.ok) return fallback;
-			return { ok: false, skipped: true, reason: fallback.reason };
+			return { ok: false, skipped: true, reason: "Transcript was empty." };
 		}
 		return { ok: true, text };
 	} catch (error) {
-		const fallback = await fetchInnerTubeTranscript(info, language);
-		if (fallback.ok) return fallback;
-		return {
-			ok: false,
-			skipped: true,
-			reason:
-				error instanceof Error
-					? `Caption fetch failed: ${error.message}; ${fallback.reason}`
-					: `Caption fetch failed; ${fallback.reason}`,
-		};
+		const reason = error instanceof Error ? error.message : "Unknown error.";
+		console.warn(
+			`[transcript] youtube-transcript-plus failed for ${videoId}: ${reason}`,
+		);
+		// Fall through to yt-dlp.
 	}
+
+	// 2. Fallback: yt-dlp.
+	return fetchTranscriptViaYtdlp(videoId, lang, proxyUrl());
 }

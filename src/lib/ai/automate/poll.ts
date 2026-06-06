@@ -83,7 +83,7 @@ export type PerSourceResult = {
 	title: string;
 	added: number;
 	skipped: number;
-	status: "ok" | "error" | "partial";
+	status: "ok" | "error" | "partial" | "skipped";
 	error?: string;
 };
 
@@ -329,7 +329,7 @@ async function pollPaperSource(
 	return result;
 }
 
-async function pollYoutubeSource(
+async function _pollYoutubeSource(
 	source: AutomationSource,
 	deps: {
 		db: Database;
@@ -411,7 +411,7 @@ export async function runPoll(options: PollOptions = {}): Promise<PollSummary> {
 	const db = options.db ?? getDatabase();
 	const embedder = options.embedder ?? embedTexts;
 	const fetchFn = options.fetchFn ?? fetch;
-	const youtube = options.youtube ?? defaultYoutubeDeps;
+	const _youtube = options.youtube ?? defaultYoutubeDeps;
 
 	const sources = listEnabledSources(db);
 	const perSource: PerSourceResult[] = [];
@@ -440,12 +440,15 @@ export async function runPoll(options: PollOptions = {}): Promise<PollSummary> {
 				signal: options.signal,
 			});
 		} else if (source.type === "youtube") {
-			result = await pollYoutubeSource(source, {
-				db,
-				embedder,
-				youtube,
-				signal: options.signal,
-			});
+			result = {
+				sourceId: source.id,
+				type: source.type,
+				title: source.title ?? source.url,
+				added: 0,
+				skipped: 0,
+				status: "skipped",
+				error: "YouTube channels coming soon.",
+			};
 		} else {
 			// arXiv asks callers to space requests; pause before each arXiv poll.
 			if (source.type === "arxiv") {

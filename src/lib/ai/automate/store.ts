@@ -11,7 +11,7 @@ import type { PaperType } from "./papers/types";
  */
 
 export type SourceType = "rss" | "youtube" | PaperType;
-export type SourceStatus = "ok" | "error" | "partial";
+export type SourceStatus = "ok" | "error" | "partial" | "skipped";
 
 export type AutomationSource = {
 	id: string;

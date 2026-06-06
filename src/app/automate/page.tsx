@@ -118,17 +118,20 @@ export default function AutomatePage(): React.JSX.Element {
 					</p>
 				</div>
 
-				<div className="relative flex flex-col gap-2 rounded-xl border p-5">
+				<div className="relative flex flex-col gap-2 rounded-xl border p-5 opacity-50 pointer-events-none">
 					<div className="flex items-center justify-between gap-2">
 						<div className="flex items-center gap-2">
 							<MonitorPlay className="size-4 text-muted-foreground" />
 							<h2 className="text-sm font-semibold">YouTube channels</h2>
+							<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+								Coming soon
+							</span>
 						</div>
 						<Button
 							variant="ghost"
 							size="sm"
 							className="-mr-2 h-7 px-2 text-muted-foreground"
-							onClick={() => setYoutubeOpen(true)}
+							disabled
 						>
 							<Plus className="size-4" />
 							{automation.youtube.length > 0 ? "Add or edit" : "Add"}

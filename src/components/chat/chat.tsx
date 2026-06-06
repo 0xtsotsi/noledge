@@ -108,6 +108,11 @@ export function Chat(): React.JSX.Element {
 	const [loadError, setLoadError] = useState<string | null>(null);
 
 	const abortRef = useRef<AbortController | null>(null);
+	// The stream that currently "owns" this view. A stream started in one
+	// conversation keeps running (and saving) in the background after you
+	// navigate away, but it must not touch the view it no longer owns.
+	const currentStreamRef = useRef<AbortController | null>(null);
+	const mountedRef = useRef(true);
 	const modelRef = useRef<string | null>(null);
 	modelRef.current = model;
 	const thinkingRef = useRef<boolean>(thinking);
@@ -115,8 +120,15 @@ export function Chat(): React.JSX.Element {
 
 	const conversationIdRef = useRef<string | null>(null);
 	const loadedChatIdRef = useRef<string | null>(null);
-	const messagesRef = useRef<UiMessage[]>([]);
-	messagesRef.current = messages;
+	// Bumped on every load so a slow/stale fetch can't clobber a newer one.
+	const loadTokenRef = useRef(0);
+
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
 
 	// Persist model selection
 	useEffect(() => {
@@ -140,7 +152,12 @@ export function Chat(): React.JSX.Element {
 
 	// Load conversation from URL
 	useEffect(() => {
+		const token = ++loadTokenRef.current;
 		if (!chatIdFromUrl) {
+			// Fresh "New chat" screen: detach any background stream from this view
+			// (it keeps running and still saves) and reset to an empty composer.
+			currentStreamRef.current = null;
+			setStatus("ready");
 			setMessages([]);
 			conversationIdRef.current = null;
 			loadedChatIdRef.current = null;
@@ -149,9 +166,15 @@ export function Chat(): React.JSX.Element {
 			return;
 		}
 		if (loadedChatIdRef.current === chatIdFromUrl) {
+			// Already showing this conversation (e.g. we just adopted a freshly
+			// created id after streaming) — don't reload or disturb the stream.
 			setLoadingConversation(false);
 			return;
 		}
+		// Switching to a different existing conversation: detach the in-flight
+		// stream so its completion can't flip this view's state.
+		currentStreamRef.current = null;
+		setStatus("ready");
 		setLoadingConversation(true);
 		setLoadError(null);
 		fetch(`/api/conversations/${chatIdFromUrl}`)
@@ -160,6 +183,7 @@ export function Chat(): React.JSX.Element {
 				return res.json() as Promise<{ conversation: Conversation }>;
 			})
 			.then((data) => {
+				if (loadTokenRef.current !== token) return; // a newer load won
 				const loaded = data.conversation.messages.map((m, i) => ({
 					id: `m-${chatIdFromUrl}-${i}`,
 					role: m.role,
@@ -170,9 +194,11 @@ export function Chat(): React.JSX.Element {
 				loadedChatIdRef.current = chatIdFromUrl;
 			})
 			.catch(() => {
+				if (loadTokenRef.current !== token) return;
 				setLoadError("Could not load this conversation.");
 			})
 			.finally(() => {
+				if (loadTokenRef.current !== token) return;
 				setLoadingConversation(false);
 			});
 	}, [chatIdFromUrl]);
@@ -196,6 +222,9 @@ export function Chat(): React.JSX.Element {
 		};
 	}, []);
 
+	// Persist a conversation. Pure I/O: never navigates or mutates view refs —
+	// the caller decides whether to adopt a freshly created id, since only it
+	// knows whether the user is still looking at this stream's output.
 	const saveConversation = useCallback(
 		async (id: string | null, msgs: UiMessage[]): Promise<string | null> => {
 			const payload = msgs.map((m) => ({
@@ -213,11 +242,7 @@ export function Chat(): React.JSX.Element {
 				});
 				if (!res.ok) return null;
 				const data = (await res.json()) as { id: string };
-				const newId = data.id;
-				conversationIdRef.current = newId;
-				loadedChatIdRef.current = newId;
-				router.replace(`/?chat=${newId}`);
-				return newId;
+				return data.id;
 			}
 
 			const res = await fetch(`/api/conversations/${id}`, {
@@ -228,7 +253,7 @@ export function Chat(): React.JSX.Element {
 			if (!res.ok) return null;
 			return id;
 		},
-		[router],
+		[],
 	);
 
 	const updateAssistant = useCallback(
@@ -251,11 +276,53 @@ export function Chat(): React.JSX.Element {
 
 			const controller = new AbortController();
 			abortRef.current = controller;
+			currentStreamRef.current = controller;
+
+			// True only while this stream still owns the visible view. Once the user
+			// navigates elsewhere the stream keeps running in the background (so it
+			// still saves) but stops mutating the view it no longer owns.
+			const isCurrent = (): boolean => currentStreamRef.current === controller;
+
+			// Adopt a conversation id into the live view (and rewrite the URL), but
+			// only while this stream still owns the visible, mounted view — never
+			// yank the user back from another chat/page.
+			const adopt = (id: string): void => {
+				if (isCurrent() && mountedRef.current) {
+					conversationIdRef.current = id;
+					loadedChatIdRef.current = id;
+					router.replace(`/?chat=${id}`);
+				}
+			};
+
+			// Establish the conversation id up front so the sidebar can show a live
+			// (shimmering) entry while we stream — even for a brand-new chat, and
+			// even if the user navigates away mid-stream.
+			let convId = conversationIdRef.current;
+			if (!convId) {
+				// Best-effort: if creation fails (e.g. offline) we still stream, and
+				// the final save below gets another chance to persist.
+				const createdId = await saveConversation(null, history).catch(
+					() => null,
+				);
+				if (createdId) {
+					convId = createdId;
+					adopt(createdId);
+					window.dispatchEvent(new CustomEvent("conversations:changed"));
+				}
+			}
+			if (convId) {
+				window.dispatchEvent(
+					new CustomEvent("conversation:stream", {
+						detail: { id: convId, streaming: true },
+					}),
+				);
+			}
 
 			// Throttle text rendering: tokens arrive far faster than the UI needs to
 			// repaint. We buffer deltas and flush the accumulated text on a ~50ms
 			// cadence so React re-renders (and the markdown re-lex) stay bounded
 			// regardless of token rate.
+			let assistantContent = "";
 			let pendingText = "";
 			let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -264,6 +331,7 @@ export function Chat(): React.JSX.Element {
 				if (!pendingText) return;
 				const delta = pendingText;
 				pendingText = "";
+				if (!isCurrent()) return;
 				updateAssistant(assistantId, (prev) => ({
 					...prev,
 					content: prev.content + delta,
@@ -309,30 +377,36 @@ export function Chat(): React.JSX.Element {
 						const chunk = JSON.parse(json) as ChatStreamChunk;
 
 						if (chunk.type === "text") {
-							setStatus("streaming");
+							assistantContent += chunk.text;
+							if (isCurrent()) setStatus("streaming");
 							pendingText += chunk.text;
 							scheduleFlush();
 						} else if (chunk.type === "reasoning") {
-							setStatus("streaming");
-							updateAssistant(assistantId, (prev) => ({
-								...prev,
-								reasoning: (prev.reasoning ?? "") + chunk.text,
-							}));
+							if (isCurrent()) {
+								setStatus("streaming");
+								updateAssistant(assistantId, (prev) => ({
+									...prev,
+									reasoning: (prev.reasoning ?? "") + chunk.text,
+								}));
+							}
 						} else if (chunk.type === "step") {
-							updateAssistant(assistantId, (prev) => ({
-								...prev,
-								steps: [...(prev.steps ?? []), chunk.step],
-							}));
+							if (isCurrent())
+								updateAssistant(assistantId, (prev) => ({
+									...prev,
+									steps: [...(prev.steps ?? []), chunk.step],
+								}));
 						} else if (chunk.type === "source") {
-							updateAssistant(assistantId, (prev) => ({
-								...prev,
-								sources: [...(prev.sources ?? []), chunk.source],
-							}));
+							if (isCurrent())
+								updateAssistant(assistantId, (prev) => ({
+									...prev,
+									sources: [...(prev.sources ?? []), chunk.source],
+								}));
 						} else if (chunk.type === "image") {
-							updateAssistant(assistantId, (prev) => ({
-								...prev,
-								image: { url: chunk.url, alt: chunk.alt },
-							}));
+							if (isCurrent())
+								updateAssistant(assistantId, (prev) => ({
+									...prev,
+									image: { url: chunk.url, alt: chunk.alt },
+								}));
 						}
 					}
 				}
@@ -343,32 +417,62 @@ export function Chat(): React.JSX.Element {
 				if (flushTimer !== null) clearTimeout(flushTimer);
 				flushText();
 				if (!(error instanceof DOMException && error.name === "AbortError")) {
-					updateAssistant(assistantId, (prev) => ({
-						...prev,
-						content:
-							prev.content ||
-							"Something went wrong while generating a response.",
-					}));
+					if (!assistantContent) {
+						assistantContent =
+							"Something went wrong while generating a response.";
+					}
+					if (isCurrent()) {
+						updateAssistant(assistantId, (prev) => ({
+							...prev,
+							content: prev.content || assistantContent,
+						}));
+					}
 				}
 			} finally {
-				abortRef.current = null;
-				setStatus("ready");
+				if (abortRef.current === controller) abortRef.current = null;
+				if (isCurrent()) {
+					currentStreamRef.current = null;
+					setStatus("ready");
+				}
 			}
-		},
-		[updateAssistant],
-	);
 
-	// Auto-save conversation after each assistant response finishes
-	useEffect(() => {
-		if (status !== "ready" || messagesRef.current.length === 0) return;
-		const id = conversationIdRef.current;
-		void saveConversation(id, messagesRef.current).then((savedId) => {
+			// Tell the sidebar this stream is no longer running so it can stop the
+			// shimmer. `done` flags a real completion (vs. an empty abort) so the
+			// sidebar can mark unopened sessions as freshly finished.
+			const stoppedEmpty = controller.signal.aborted && !assistantContent;
+			const emitStreamEnd = (id: string): void => {
+				window.dispatchEvent(
+					new CustomEvent("conversation:stream", {
+						detail: { id, streaming: false, done: !stoppedEmpty },
+					}),
+				);
+			};
+
+			// If the user stopped the stream before anything came back, there's
+			// nothing worth persisting.
+			if (stoppedEmpty) {
+				if (convId) emitStreamEnd(convId);
+				return;
+			}
+
+			const finalMessages: UiMessage[] = [
+				...history,
+				{ id: assistantId, role: "assistant", content: assistantContent },
+			];
+			// Guard the save so a network error can't leave the sidebar shimmer
+			// stuck — we always emit the stream-end below.
+			const savedId = await saveConversation(convId, finalMessages).catch(
+				() => null,
+			);
 			if (savedId) {
-				conversationIdRef.current = savedId;
+				if (!convId) adopt(savedId);
+				convId = savedId;
 				window.dispatchEvent(new CustomEvent("conversations:changed"));
 			}
-		});
-	}, [status, saveConversation]);
+			if (convId) emitStreamEnd(convId);
+		},
+		[router, saveConversation, updateAssistant],
+	);
 
 	const sendMessage = useCallback((): void => {
 		const text = input.trim();

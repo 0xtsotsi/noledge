@@ -2,7 +2,7 @@ import type { Database } from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "@/lib/ai/db/client";
 import type { Embedder } from "@/lib/ai/rag/ingest";
-import { runPoll, type YoutubeDeps } from "./poll";
+import { runPoll } from "./poll";
 import { addSource, documentExists } from "./store";
 
 /** Deterministic embedder: one-hot vector so ingest always succeeds. */
@@ -120,9 +120,9 @@ describe("runPoll (RSS)", () => {
 });
 
 describe("runPoll (YouTube)", () => {
-	it("lists videos, fetches transcripts, ingests, and dedups", async () => {
+	it("skips YouTube sources with coming-soon status", async () => {
 		db = openDatabase(":memory:");
-		const source = addSource(
+		addSource(
 			{
 				type: "youtube",
 				url: "https://youtube.com/@chan",
@@ -132,64 +132,9 @@ describe("runPoll (YouTube)", () => {
 			db,
 		);
 
-		const youtube: YoutubeDeps = {
-			listVideos: async () => ({
-				ok: true,
-				videos: [
-					{
-						videoId: "vid-a",
-						title: "Vid A",
-						url: "https://www.youtube.com/watch?v=vid-a",
-						publishedAt: null,
-					},
-				],
-			}),
-			fetchTranscript: async () => ({ ok: true, text: "Hello world" }),
-		};
-
-		const summary = await runPoll({ db, embedder, youtube });
-		expect(summary.added).toBe(1);
-		expect(documentExists(source.id, "vid-a", db)).toBe(true);
-
-		const second = await runPoll({ db, embedder, youtube });
-		expect(second.added).toBe(0);
-		expect(second.skipped).toBe(1);
-	});
-
-	it("skips a video with no captions rather than failing", async () => {
-		db = openDatabase(":memory:");
-		addSource(
-			{
-				type: "youtube",
-				url: "https://youtube.com/@chan",
-				identifier: "UC999",
-				title: "Chan",
-			},
-			db,
-		);
-
-		const youtube: YoutubeDeps = {
-			listVideos: async () => ({
-				ok: true,
-				videos: [
-					{
-						videoId: "v-x",
-						title: "No Caps",
-						url: "https://www.youtube.com/watch?v=v-x",
-						publishedAt: null,
-					},
-				],
-			}),
-			fetchTranscript: async () => ({
-				ok: false,
-				skipped: true,
-				reason: "No transcript available for this video.",
-			}),
-		};
-
-		const summary = await runPoll({ db, embedder, youtube });
+		const summary = await runPoll({ db, embedder });
 		expect(summary.added).toBe(0);
-		expect(summary.skipped).toBe(1);
+		expect(summary.skipped).toBe(0);
 		expect(summary.errors).toBe(0);
 	});
 });
