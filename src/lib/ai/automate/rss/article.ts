@@ -2,6 +2,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { normalizeText } from "@/lib/ai/rag/normalize";
 import { type Attempt, isTransientStatus, withRetry } from "../retry";
+import { decodeBody } from "./decode";
 
 /**
  * Full-article fetcher for RSS/Atom items whose feed body is only a teaser or
@@ -107,13 +108,14 @@ async function fetchArticleTextOnce(
 				retry: false,
 			};
 		}
-		const html = await response.text();
-		if (html.length > MAX_HTML_BYTES) {
+		const decoded = await decodeBody(response, MAX_HTML_BYTES);
+		if (!decoded.ok) {
 			return {
-				value: { ok: false, error: "Article exceeds the size limit." },
+				value: { ok: false, error: `Article ${decoded.error.toLowerCase()}` },
 				retry: false,
 			};
 		}
+		const html = decoded.text;
 		if (!looksLikeHtml(response.headers.get("content-type"), html)) {
 			return {
 				value: { ok: false, error: "Article URL did not return HTML." },

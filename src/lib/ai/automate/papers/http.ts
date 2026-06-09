@@ -23,14 +23,28 @@ export type HttpBinaryResult =
 	| { ok: false; error: string };
 
 const MAX_BINARY_BYTES = 40 * 1024 * 1024;
+/** Longest server-requested retry wait we will honor. */
+const MAX_RETRY_AFTER_MS = 30_000;
 
 /** Whether an HTTP result is worth another attempt. */
 function retryHttp<
 	T extends { ok: true; status: number } | { ok: false; error: string },
->(result: T): Attempt<T> {
+>(result: T, response?: Response): Attempt<T> {
 	const retry = result.ok
 		? isTransientStatus(result.status)
 		: result.error !== CALLER_ABORTED;
+	// On a 429, honor the server's Retry-After (seconds form), capped.
+	if (retry && response?.status === 429) {
+		const header = response.headers.get("retry-after");
+		const seconds = header === null ? Number.NaN : Number(header);
+		if (Number.isFinite(seconds) && seconds > 0) {
+			return {
+				value: result,
+				retry,
+				retryAfterMs: Math.min(seconds * 1000, MAX_RETRY_AFTER_MS),
+			};
+		}
+	}
 	return { value: result, retry };
 }
 
@@ -39,7 +53,7 @@ export async function httpText(
 	url: string,
 	options: { accept?: string; signal?: AbortSignal } = {},
 ): Promise<HttpTextResult> {
-	return withRetry(async () => retryHttp(await httpTextOnce(url, options)), {
+	return withRetry(() => httpTextOnce(url, options), {
 		signal: options.signal,
 	});
 }
@@ -47,7 +61,7 @@ export async function httpText(
 async function httpTextOnce(
 	url: string,
 	options: { accept?: string; signal?: AbortSignal },
-): Promise<HttpTextResult> {
+): Promise<Attempt<HttpTextResult>> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 	if (options.signal) {
@@ -65,19 +79,19 @@ async function httpTextOnce(
 			signal: controller.signal,
 		});
 		const body = await response.text();
-		return { ok: true, status: response.status, body };
+		return retryHttp({ ok: true, status: response.status, body }, response);
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
 			// Distinguish a caller cancellation (don't retry) from our own timeout.
 			if (options.signal?.aborted) {
-				return { ok: false, error: CALLER_ABORTED };
+				return retryHttp({ ok: false, error: CALLER_ABORTED });
 			}
-			return { ok: false, error: "Request timed out." };
+			return retryHttp({ ok: false, error: "Request timed out." });
 		}
-		return {
+		return retryHttp({
 			ok: false,
 			error: error instanceof Error ? error.message : "Request failed.",
-		};
+		});
 	} finally {
 		clearTimeout(timer);
 	}
@@ -88,7 +102,7 @@ export async function httpBinary(
 	url: string,
 	options: { accept?: string; signal?: AbortSignal } = {},
 ): Promise<HttpBinaryResult> {
-	return withRetry(async () => retryHttp(await httpBinaryOnce(url, options)), {
+	return withRetry(() => httpBinaryOnce(url, options), {
 		signal: options.signal,
 	});
 }
@@ -96,7 +110,7 @@ export async function httpBinary(
 async function httpBinaryOnce(
 	url: string,
 	options: { accept?: string; signal?: AbortSignal },
-): Promise<HttpBinaryResult> {
+): Promise<Attempt<HttpBinaryResult>> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 	if (options.signal) {
@@ -115,29 +129,39 @@ async function httpBinaryOnce(
 		});
 		const length = response.headers.get("content-length");
 		if (length && Number(length) > MAX_BINARY_BYTES) {
-			return { ok: false, error: "File exceeds the size limit." };
+			return {
+				value: { ok: false, error: "File exceeds the size limit." },
+				retry: false,
+			};
 		}
 		const body = Buffer.from(await response.arrayBuffer());
 		if (body.byteLength > MAX_BINARY_BYTES) {
-			return { ok: false, error: "File exceeds the size limit." };
+			return {
+				value: { ok: false, error: "File exceeds the size limit." },
+				retry: false,
+			};
 		}
-		return {
-			ok: true,
-			status: response.status,
-			body,
-			mime: response.headers.get("content-type") ?? "application/octet-stream",
-		};
+		return retryHttp(
+			{
+				ok: true,
+				status: response.status,
+				body,
+				mime:
+					response.headers.get("content-type") ?? "application/octet-stream",
+			},
+			response,
+		);
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
 			if (options.signal?.aborted) {
-				return { ok: false, error: CALLER_ABORTED };
+				return retryHttp({ ok: false, error: CALLER_ABORTED });
 			}
-			return { ok: false, error: "Request timed out." };
+			return retryHttp({ ok: false, error: "Request timed out." });
 		}
-		return {
+		return retryHttp({
 			ok: false,
 			error: error instanceof Error ? error.message : "Request failed.",
-		};
+		});
 	} finally {
 		clearTimeout(timer);
 	}

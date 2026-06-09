@@ -58,9 +58,10 @@ export function isSameLocalDay(a: Date, b: Date, timeZone: string): boolean {
  * Decide whether a scheduled poll should run now.
  *
  * Returns true when scheduling is enabled (`scheduleHour` set and `timezone`
- * present), the current local hour equals `scheduleHour`, and the last run (if
- * any) was on an earlier local day. The once-per-day guard means a run that
- * already happened this hour won't repeat on the next wake-up within the hour.
+ * present), the current local hour is at or past `scheduleHour`, and the last
+ * run (if any) was on an earlier local day. Catch-up semantics: a laptop that
+ * was asleep at the scheduled hour still runs on its first wake-up later that
+ * day; the once-per-day guard stops the run repeating on subsequent wake-ups.
  */
 export function shouldRunNow(
 	config: AutomationConfig,
@@ -77,7 +78,7 @@ export function shouldRunNow(
 		// Invalid timezone string — never fire rather than throw on the timer.
 		return false;
 	}
-	if (currentHour !== scheduleHour) return false;
+	if (currentHour < scheduleHour) return false;
 
 	if (
 		lastRunAt !== null &&

@@ -162,13 +162,14 @@ function AssistantMessage({
 				</Markdown>
 			)}
 
-			{message.image ? (
-				// biome-ignore lint/performance/noImgElement: remote demo image
-				<img
-					src={message.image.url}
-					alt={message.image.alt}
-					className="mt-1 max-h-80 w-auto rounded-xl border object-cover"
-				/>
+			{message.error ? (
+				<div className="flex w-full items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2">
+					<p className="text-sm text-destructive">{message.error}</p>
+					<Button variant="outline" size="sm" onClick={onRegenerate}>
+						<ArrowsCounterClockwise className="size-4" />
+						Retry
+					</Button>
+				</div>
 			) : null}
 
 			{message.sources && message.sources.length > 0 ? (

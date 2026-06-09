@@ -1,5 +1,6 @@
 import type { Database } from "better-sqlite3";
 import { getDatabase } from "@/lib/ai/db/client";
+import { blobToVector, toVectorBlob } from "@/lib/ai/embeddings/embed";
 
 /**
  * A node is either a single chunk (the smallest unit of knowledge the brain
@@ -76,13 +77,6 @@ type DocChunkRow = {
 	embedding: Buffer;
 };
 
-/** Read a sqlite-vec `float[]` blob column back into a typed array. */
-function blobToVector(blob: Buffer): Float32Array {
-	return new Float32Array(
-		blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength),
-	);
-}
-
 /** Return an L2-normalized copy. A zero vector is returned unchanged. */
 function normalized(vector: Float32Array): Float32Array {
 	let sumSquares = 0;
@@ -95,11 +89,8 @@ function normalized(vector: Float32Array): Float32Array {
 	return out;
 }
 
-/** Dot product of two unit vectors == cosine similarity. */
-function dot(a: Float32Array, b: Float32Array): number {
-	let total = 0;
-	for (let i = 0; i < a.length; i += 1) total += (a[i] ?? 0) * (b[i] ?? 0);
-	return total;
+function vectorToBlob(vector: Float32Array): Buffer {
+	return toVectorBlob(Array.from(vector));
 }
 
 /** Trim a chunk down to a short, single-line preview for tooltips. */
@@ -373,6 +364,12 @@ function buildDocumentGraph(
 		.slice(0, MAX_NODES);
 
 	const centroids = docs.map((doc) => normalized(doc.sum));
+	const centroidByDoc = new Map<string, Float32Array>();
+	for (let i = 0; i < docs.length; i += 1) {
+		const doc = docs[i];
+		const centroid = centroids[i];
+		if (doc && centroid) centroidByDoc.set(doc.documentId, centroid);
+	}
 	const nodes: BrainNode[] = docs.map((doc) => ({
 		id: doc.documentId,
 		documentId: doc.documentId,
@@ -388,36 +385,73 @@ function buildDocumentGraph(
 	const seen = new Set<string>();
 	const degree = new Map<string, number>();
 
-	// Inter-document semantic edges. The document set is small relative to chunk
-	// count, so bounded pairwise over centroids is cheap and exact.
+	// Inter-document semantic edges via a temp sqlite-vec KNN table. This keeps the
+	// large-library path off the JS O(n² · 1536) pairwise loop: we insert the capped
+	// normalized centroids once, then ask vec0 for each document's nearest handful.
 	const candidates: BrainLink[] = [];
-	for (let i = 0; i < docs.length; i += 1) {
-		const a = centroids[i];
-		const docA = docs[i];
-		if (!a || !docA) continue;
-		for (let j = i + 1; j < docs.length; j += 1) {
-			const b = centroids[j];
-			const docB = docs[j];
-			if (!b || !docB) continue;
-			const weight = dot(a, b);
-			if (weight >= minSimilarity) {
-				candidates.push({
-					source: docA.documentId,
-					target: docB.documentId,
-					weight,
-					kind: "semantic",
-				});
+	db.exec("DROP TABLE IF EXISTS temp.vec_doc_centroids");
+	db.exec(
+		`CREATE VIRTUAL TABLE temp.vec_doc_centroids USING vec0(
+			doc_id TEXT PRIMARY KEY,
+			embedding float[1536] distance_metric=cosine
+		)`,
+	);
+	try {
+		const insert = db.prepare(
+			"INSERT INTO temp.vec_doc_centroids (doc_id, embedding) VALUES (?, ?)",
+		);
+		const insertAll = db.transaction(
+			(items: readonly { documentId: string; embedding: Float32Array }[]) => {
+				for (const item of items) {
+					insert.run(item.documentId, vectorToBlob(item.embedding));
+				}
+			},
+		);
+		insertAll(
+			docs.flatMap((doc) => {
+				const embedding = centroidByDoc.get(doc.documentId);
+				return embedding ? [{ documentId: doc.documentId, embedding }] : [];
+			}),
+		);
+
+		const knn = db.prepare(
+			`SELECT doc_id, distance
+			 FROM temp.vec_doc_centroids
+			 WHERE embedding MATCH ? AND k = ?
+			 ORDER BY distance`,
+		);
+		const k = maxDegree + 1;
+		for (const doc of docs) {
+			const centroid = centroidByDoc.get(doc.documentId);
+			if (!centroid) continue;
+			const neighbors = knn.all(vectorToBlob(centroid), k) as {
+				doc_id: string;
+				distance: number;
+			}[];
+			for (const neighbor of neighbors) {
+				if (neighbor.doc_id === doc.documentId) continue;
+				const key = edgeKey(doc.documentId, neighbor.doc_id);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				const weight = 1 - neighbor.distance;
+				if (weight >= minSimilarity) {
+					candidates.push({
+						source: doc.documentId,
+						target: neighbor.doc_id,
+						weight,
+						kind: "semantic",
+					});
+				}
 			}
 		}
+	} finally {
+		db.exec("DROP TABLE IF EXISTS temp.vec_doc_centroids");
 	}
 
 	candidates.sort((x, y) => y.weight - x.weight);
 	for (const link of candidates) {
 		if ((degree.get(link.source) ?? 0) >= maxDegree) continue;
 		if ((degree.get(link.target) ?? 0) >= maxDegree) continue;
-		const key = edgeKey(link.source, link.target);
-		if (seen.has(key)) continue;
-		seen.add(key);
 		links.push(link);
 		degree.set(link.source, (degree.get(link.source) ?? 0) + 1);
 		degree.set(link.target, (degree.get(link.target) ?? 0) + 1);

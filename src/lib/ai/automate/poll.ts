@@ -14,6 +14,7 @@ import {
 	documentExists,
 	listEnabledSources,
 	setLastRunAt,
+	setSourceHttpCache,
 	updateSourceStatus,
 } from "./store";
 import {
@@ -175,12 +176,23 @@ async function pollRssSource(
 	const feed = await fetchFeed(source.url, {
 		fetchFn: deps.fetchFn,
 		signal: deps.signal,
+		etag: source.etag,
+		lastModified: source.lastModified,
 	});
 	if (!feed.ok) {
 		result.status = "error";
 		result.error = feed.error;
 		return result;
 	}
+	// Conditional GET hit — nothing changed upstream, so skip the whole body.
+	if (feed.notModified) {
+		return result;
+	}
+	setSourceHttpCache(
+		source.id,
+		{ etag: feed.etag, lastModified: feed.lastModified },
+		deps.db,
+	);
 
 	const items = feed.feed.items.slice(0, MAX_ITEMS_PER_SOURCE);
 	for (const item of items) {
@@ -273,11 +285,6 @@ async function pollPaperSource(
 		return result;
 	}
 
-	// Count new items whose full text couldn't be fetched (e.g. paywalled, or a
-	// PDF host behind a bot challenge). If a source lists fresh items but none are
-	// ingestable, that's reported as `partial` rather than a silent green `ok`.
-	let unfetched = 0;
-
 	for (const item of listed.items) {
 		if (item.externalId.length === 0 || item.abstract.length === 0) {
 			result.skipped += 1;
@@ -288,25 +295,35 @@ async function pollPaperSource(
 			continue;
 		}
 
+		// Prefer the full-text PDF; when it can't be fetched (paywall, bot
+		// challenge, no PDF URL) fall back to ingesting title + abstract so the
+		// item is recorded once and never re-fetched on every later poll.
 		const payload = await paperIngestPayload(item, deps.signal);
-		if (!payload.ok) {
-			result.skipped += 1;
-			unfetched += 1;
-			result.error = payload.reason;
-			continue;
-		}
+		const abstractText = `${item.title}\n\n${item.abstract}`;
 		const ingested = await ingestText(
-			{
-				text: payload.text,
-				title: item.title || item.externalId,
-				filename: payload.filename,
-				mime: payload.mime,
-				bytes: payload.bytes,
-				sourceId: source.id,
-				externalId: item.externalId,
-				sourceUrl: item.url || undefined,
-				publishedAt: item.publishedAt,
-			},
+			payload.ok
+				? {
+						text: payload.text,
+						title: item.title || item.externalId,
+						filename: payload.filename,
+						mime: payload.mime,
+						bytes: payload.bytes,
+						sourceId: source.id,
+						externalId: item.externalId,
+						sourceUrl: item.url || undefined,
+						publishedAt: item.publishedAt,
+					}
+				: {
+						text: abstractText,
+						title: item.title || item.externalId,
+						filename: item.url || item.externalId,
+						mime: "text/plain",
+						bytes: feedItemBytes(abstractText),
+						sourceId: source.id,
+						externalId: item.externalId,
+						sourceUrl: item.url || undefined,
+						publishedAt: item.publishedAt,
+					},
 			{ db: deps.db, embedder: deps.embedder, signal: deps.signal },
 		);
 		if (ingested.ok) {
@@ -318,18 +335,10 @@ async function pollPaperSource(
 		}
 	}
 
-	// Listed fresh items but couldn't fetch full text for any of them: surface it
-	// instead of masquerading as a healthy poll. (When `added > 0`, a mix is
-	// expected and the successful items stand on their own.)
-	if (result.status === "ok" && result.added === 0 && unfetched > 0) {
-		result.status = "partial";
-		result.error ??= "No full text could be fetched for new items.";
-	}
-
 	return result;
 }
 
-async function _pollYoutubeSource(
+async function pollYoutubeSource(
 	source: AutomationSource,
 	deps: {
 		db: Database;
@@ -411,7 +420,7 @@ export async function runPoll(options: PollOptions = {}): Promise<PollSummary> {
 	const db = options.db ?? getDatabase();
 	const embedder = options.embedder ?? embedTexts;
 	const fetchFn = options.fetchFn ?? fetch;
-	const _youtube = options.youtube ?? defaultYoutubeDeps;
+	const youtube = options.youtube ?? defaultYoutubeDeps;
 
 	const sources = listEnabledSources(db);
 	const perSource: PerSourceResult[] = [];
@@ -440,15 +449,12 @@ export async function runPoll(options: PollOptions = {}): Promise<PollSummary> {
 				signal: options.signal,
 			});
 		} else if (source.type === "youtube") {
-			result = {
-				sourceId: source.id,
-				type: source.type,
-				title: source.title ?? source.url,
-				added: 0,
-				skipped: 0,
-				status: "skipped",
-				error: "YouTube channels coming soon.",
-			};
+			result = await pollYoutubeSource(source, {
+				db,
+				embedder,
+				youtube,
+				signal: options.signal,
+			});
 		} else {
 			// arXiv asks callers to space requests; pause before each arXiv poll.
 			if (source.type === "arxiv") {

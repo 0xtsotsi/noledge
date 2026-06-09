@@ -115,3 +115,10 @@ export async function embedTexts(
 export function toVectorBlob(embedding: number[]): Buffer {
 	return Buffer.from(new Float32Array(embedding).buffer);
 }
+
+/** Read a sqlite-vec `float[]` blob column back into a typed array. */
+export function blobToVector(blob: Buffer): Float32Array {
+	return new Float32Array(
+		blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength),
+	);
+}

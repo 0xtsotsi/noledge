@@ -110,26 +110,35 @@ export async function fetchTranscript(
 	const lang = options.language ?? "en";
 	const proxy = await proxyFetch();
 
+	// Language preference: exact requested language, then English, then
+	// whatever track the video has (lang omitted → library picks the first
+	// available). Many videos only carry auto-generated captions in their
+	// original language, which would otherwise be skipped entirely.
+	const languages: (string | undefined)[] = [...new Set([lang, "en"])];
+	languages.push(undefined);
+
 	// 1. Primary: youtube-transcript-plus with retry + cache.
-	try {
-		const segments = await ytFetchTranscript(videoId, {
-			lang,
-			retries: 3,
-			retryDelay: 2000,
-			cache: transcriptCache,
-			...proxy,
-		});
-		const text = segmentsToText(segments);
-		if (text.trim().length === 0) {
-			return { ok: false, skipped: true, reason: "Transcript was empty." };
+	for (const candidate of languages) {
+		try {
+			const segments = await ytFetchTranscript(videoId, {
+				...(candidate ? { lang: candidate } : {}),
+				retries: 3,
+				retryDelay: 2000,
+				cache: transcriptCache,
+				...proxy,
+			});
+			const text = segmentsToText(segments);
+			if (text.trim().length === 0) {
+				return { ok: false, skipped: true, reason: "Transcript was empty." };
+			}
+			return { ok: true, text };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : "Unknown error.";
+			console.warn(
+				`[transcript] youtube-transcript-plus failed for ${videoId} (lang: ${candidate ?? "any"}): ${reason}`,
+			);
+			// Try the next preferred language, then fall through to yt-dlp.
 		}
-		return { ok: true, text };
-	} catch (error) {
-		const reason = error instanceof Error ? error.message : "Unknown error.";
-		console.warn(
-			`[transcript] youtube-transcript-plus failed for ${videoId}: ${reason}`,
-		);
-		// Fall through to yt-dlp.
 	}
 
 	// 2. Fallback: yt-dlp.

@@ -70,7 +70,13 @@ function makeTitle(text: string): string {
 type Conversation = {
 	id: string;
 	title: string;
-	messages: { role: "user" | "assistant"; content: string }[];
+	messages: {
+		role: "user" | "assistant";
+		content: string;
+		reasoning?: string;
+		sources?: UiMessage["sources"];
+		steps?: UiMessage["steps"];
+	}[];
 };
 
 export function Chat(): React.JSX.Element {
@@ -189,6 +195,9 @@ export function Chat(): React.JSX.Element {
 					id: `m-${chatIdFromUrl}-${i}`,
 					role: m.role,
 					content: m.content,
+					...(m.reasoning ? { reasoning: m.reasoning } : {}),
+					...(m.sources ? { sources: m.sources } : {}),
+					...(m.steps ? { steps: m.steps } : {}),
 				}));
 				setMessages(loaded);
 				conversationIdRef.current = data.conversation.id;
@@ -223,40 +232,6 @@ export function Chat(): React.JSX.Element {
 		};
 	}, []);
 
-	// Persist a conversation. Pure I/O: never navigates or mutates view refs —
-	// the caller decides whether to adopt a freshly created id, since only it
-	// knows whether the user is still looking at this stream's output.
-	const saveConversation = useCallback(
-		async (id: string | null, msgs: UiMessage[]): Promise<string | null> => {
-			const payload = msgs.map((m) => ({
-				role: m.role,
-				content: m.content,
-			}));
-
-			if (!id) {
-				const firstUser = msgs.find((m) => m.role === "user");
-				const title = firstUser ? makeTitle(firstUser.content) : "New chat";
-				const res = await fetch("/api/conversations", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ title, messages: payload }),
-				});
-				if (!res.ok) return null;
-				const data = (await res.json()) as { id: string };
-				return data.id;
-			}
-
-			const res = await fetch(`/api/conversations/${id}`, {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ messages: payload }),
-			});
-			if (!res.ok) return null;
-			return id;
-		},
-		[],
-	);
-
 	const updateAssistant = useCallback(
 		(id: string, patch: (prev: UiMessage) => UiMessage): void => {
 			setMessages((prev) =>
@@ -267,7 +242,10 @@ export function Chat(): React.JSX.Element {
 	);
 
 	const runStream = useCallback(
-		async (history: UiMessage[]): Promise<void> => {
+		async (
+			history: UiMessage[],
+			options: { appendUser?: boolean } = {},
+		): Promise<void> => {
 			const assistantId = createId();
 			setMessages((prev) => [
 				...prev,
@@ -295,22 +273,10 @@ export function Chat(): React.JSX.Element {
 				}
 			};
 
-			// Establish the conversation id up front so the sidebar can show a live
-			// (shimmering) entry while we stream — even for a brand-new chat, and
-			// even if the user navigates away mid-stream.
+			// The server creates the conversation (and persists the user turn)
+			// before streaming; for a brand-new chat we adopt its id from the
+			// first `conversation` chunk below.
 			let convId = conversationIdRef.current;
-			if (!convId) {
-				// Best-effort: if creation fails (e.g. offline) we still stream, and
-				// the final save below gets another chance to persist.
-				const createdId = await saveConversation(null, history).catch(
-					() => null,
-				);
-				if (createdId) {
-					convId = createdId;
-					adopt(createdId);
-					window.dispatchEvent(new CustomEvent("conversations:changed"));
-				}
-			}
 			if (convId) {
 				window.dispatchEvent(
 					new CustomEvent("conversation:stream", {
@@ -326,6 +292,16 @@ export function Chat(): React.JSX.Element {
 			let assistantContent = "";
 			let pendingText = "";
 			let flushTimer: ReturnType<typeof setTimeout> | null = null;
+			let sawError = false;
+
+			// Surface a stream/transport failure on the assistant turn and park the
+			// composer in the "error" state until the next send/regenerate.
+			const surfaceError = (message: string): void => {
+				sawError = true;
+				if (!isCurrent()) return;
+				updateAssistant(assistantId, (prev) => ({ ...prev, error: message }));
+				setStatus("error");
+			};
 
 			const flushText = (): void => {
 				flushTimer = null;
@@ -349,6 +325,13 @@ export function Chat(): React.JSX.Element {
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						messages: toApiMessages(history),
+						conversationId: convId ?? undefined,
+						title: convId
+							? undefined
+							: makeTitle(
+									history.find((m) => m.role === "user")?.content ?? "",
+								) || undefined,
+						appendUser: options.appendUser ?? true,
 						model: modelRef.current ?? undefined,
 						thinking: thinkingRef.current,
 						timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -356,84 +339,97 @@ export function Chat(): React.JSX.Element {
 					signal: controller.signal,
 				});
 
-				if (!response.body) throw new Error("No response body");
+				if (!response.ok) {
+					let message = "Something went wrong while generating a response.";
+					try {
+						const data = (await response.json()) as { error?: unknown };
+						if (typeof data.error === "string" && data.error) {
+							message = data.error;
+						}
+					} catch {
+						/* non-JSON error body — keep the generic message */
+					}
+					surfaceError(message);
+				} else {
+					if (!response.body) throw new Error("No response body");
 
-				const reader = response.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
+					const reader = response.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
+					while (true) {
+						const { done, value } = await reader.read();
+						if (done) break;
+						buffer += decoder.decode(value, { stream: true });
 
-					const events = buffer.split("\n\n");
-					buffer = events.pop() ?? "";
+						const events = buffer.split("\n\n");
+						buffer = events.pop() ?? "";
 
-					for (const event of events) {
-						const line = event.trim();
-						if (!line.startsWith("data:")) continue;
-						const json = line.slice(5).trim();
-						if (!json) continue;
-						const chunk = JSON.parse(json) as ChatStreamChunk;
+						for (const event of events) {
+							const line = event.trim();
+							if (!line.startsWith("data:")) continue;
+							const json = line.slice(5).trim();
+							if (!json) continue;
+							const chunk = JSON.parse(json) as ChatStreamChunk;
 
-						if (chunk.type === "text") {
-							assistantContent += chunk.text;
-							if (isCurrent()) setStatus("streaming");
-							pendingText += chunk.text;
-							scheduleFlush();
-						} else if (chunk.type === "reasoning") {
-							if (isCurrent()) {
-								setStatus("streaming");
-								updateAssistant(assistantId, (prev) => ({
-									...prev,
-									reasoning: (prev.reasoning ?? "") + chunk.text,
-								}));
+							if (chunk.type === "text") {
+								assistantContent += chunk.text;
+								if (isCurrent()) setStatus("streaming");
+								pendingText += chunk.text;
+								scheduleFlush();
+							} else if (chunk.type === "reasoning") {
+								if (isCurrent()) {
+									setStatus("streaming");
+									updateAssistant(assistantId, (prev) => ({
+										...prev,
+										reasoning: (prev.reasoning ?? "") + chunk.text,
+									}));
+								}
+							} else if (chunk.type === "step") {
+								if (isCurrent())
+									updateAssistant(assistantId, (prev) => ({
+										...prev,
+										steps: [...(prev.steps ?? []), chunk.step],
+									}));
+							} else if (chunk.type === "source") {
+								if (isCurrent())
+									updateAssistant(assistantId, (prev) => ({
+										...prev,
+										sources: [...(prev.sources ?? []), chunk.source],
+									}));
+							} else if (chunk.type === "conversation") {
+								if (!convId) {
+									convId = chunk.id;
+									adopt(chunk.id);
+									window.dispatchEvent(
+										new CustomEvent("conversations:changed"),
+									);
+									window.dispatchEvent(
+										new CustomEvent("conversation:stream", {
+											detail: { id: chunk.id, streaming: true },
+										}),
+									);
+								}
+							} else if (chunk.type === "error") {
+								surfaceError(chunk.message);
 							}
-						} else if (chunk.type === "step") {
-							if (isCurrent())
-								updateAssistant(assistantId, (prev) => ({
-									...prev,
-									steps: [...(prev.steps ?? []), chunk.step],
-								}));
-						} else if (chunk.type === "source") {
-							if (isCurrent())
-								updateAssistant(assistantId, (prev) => ({
-									...prev,
-									sources: [...(prev.sources ?? []), chunk.source],
-								}));
-						} else if (chunk.type === "image") {
-							if (isCurrent())
-								updateAssistant(assistantId, (prev) => ({
-									...prev,
-									image: { url: chunk.url, alt: chunk.alt },
-								}));
 						}
 					}
+					// Flush any buffered tail so no trailing tokens are dropped.
+					if (flushTimer !== null) clearTimeout(flushTimer);
+					flushText();
 				}
-				// Flush any buffered tail so no trailing tokens are dropped.
-				if (flushTimer !== null) clearTimeout(flushTimer);
-				flushText();
 			} catch (error) {
 				if (flushTimer !== null) clearTimeout(flushTimer);
 				flushText();
 				if (!(error instanceof DOMException && error.name === "AbortError")) {
-					if (!assistantContent) {
-						assistantContent =
-							"Something went wrong while generating a response.";
-					}
-					if (isCurrent()) {
-						updateAssistant(assistantId, (prev) => ({
-							...prev,
-							content: prev.content || assistantContent,
-						}));
-					}
+					surfaceError("Something went wrong while generating a response.");
 				}
 			} finally {
 				if (abortRef.current === controller) abortRef.current = null;
 				if (isCurrent()) {
 					currentStreamRef.current = null;
-					setStatus("ready");
+					if (!sawError) setStatus("ready");
 				}
 			}
 
@@ -449,35 +445,20 @@ export function Chat(): React.JSX.Element {
 				);
 			};
 
-			// If the user stopped the stream before anything came back, there's
-			// nothing worth persisting.
-			if (stoppedEmpty) {
-				if (convId) emitStreamEnd(convId);
-				return;
-			}
-
-			const finalMessages: UiMessage[] = [
-				...history,
-				{ id: assistantId, role: "assistant", content: assistantContent },
-			];
-			// Guard the save so a network error can't leave the sidebar shimmer
-			// stuck — we always emit the stream-end below.
-			const savedId = await saveConversation(convId, finalMessages).catch(
-				() => null,
-			);
-			if (savedId) {
-				if (!convId) adopt(savedId);
-				convId = savedId;
+			// Persistence happened server-side as the stream ran; just refresh the
+			// sidebar ordering and stop the shimmer.
+			if (!stoppedEmpty) {
 				window.dispatchEvent(new CustomEvent("conversations:changed"));
 			}
 			if (convId) emitStreamEnd(convId);
 		},
-		[router, saveConversation, updateAssistant],
+		[router, updateAssistant],
 	);
 
 	const sendMessage = useCallback((): void => {
 		const text = input.trim();
-		if ((text.length === 0 && attachments.length === 0) || status !== "ready") {
+		const canSend = status === "ready" || status === "error";
+		if ((text.length === 0 && attachments.length === 0) || !canSend) {
 			return;
 		}
 
@@ -500,7 +481,7 @@ export function Chat(): React.JSX.Element {
 	}, []);
 
 	const regenerate = useCallback((): void => {
-		if (status !== "ready") return;
+		if (status !== "ready" && status !== "error") return;
 		let lastUserIndex = -1;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			if (messages[i]?.role === "user") {
@@ -511,7 +492,7 @@ export function Chat(): React.JSX.Element {
 		if (lastUserIndex === -1) return;
 		const history = messages.slice(0, lastUserIndex + 1);
 		setMessages(history);
-		void runStream(history);
+		void runStream(history, { appendUser: false });
 	}, [messages, runStream, status]);
 
 	const onFilesAdded = useCallback((files: File[]): void => {

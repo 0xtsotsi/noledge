@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { normalizeText } from "@/lib/ai/rag/normalize";
 import { type Attempt, isTransientStatus, withRetry } from "../retry";
+import { decodeBody } from "./decode";
 
 /**
  * RSS 2.0 / Atom / RDF feed parser built on `fast-xml-parser`. The parser handles
@@ -27,8 +28,26 @@ export type ParsedFeed = {
 };
 
 export type FetchFeedResult =
-	| { ok: true; feed: ParsedFeed }
+	/** Conditional GET hit: the feed is unchanged since the stored validators. */
+	| { ok: true; notModified: true }
+	| {
+			ok: true;
+			notModified: false;
+			feed: ParsedFeed;
+			/** Response validators to persist for the next conditional GET. */
+			etag: string | null;
+			lastModified: string | null;
+	  }
 	| { ok: false; error: string };
+
+export type FetchFeedOptions = {
+	fetchFn?: typeof fetch;
+	signal?: AbortSignal;
+	/** Stored `ETag` validator; sent as `If-None-Match`. */
+	etag?: string | null;
+	/** Stored `Last-Modified` validator; sent as `If-Modified-Since`. */
+	lastModified?: string | null;
+};
 
 /** Any parsed XML node — a string, a primitive, or an object with `#text`/attrs. */
 type XmlNode = unknown;
@@ -72,6 +91,30 @@ function textValue(node: XmlNode): string {
 	return "";
 }
 
+/**
+ * Recursively collect all text content of a parsed XML node. Needed for Atom
+ * `content type="xhtml"`, where the body is a `<div>` element tree rather than
+ * an escaped string — `textValue` would see only an object and return "".
+ */
+function deepText(node: XmlNode): string {
+	if (node === undefined || node === null) return "";
+	if (typeof node === "string") return node;
+	if (typeof node === "number" || typeof node === "boolean") {
+		return String(node);
+	}
+	if (Array.isArray(node)) {
+		return node.map(deepText).filter(Boolean).join(" ");
+	}
+	if (isObject(node)) {
+		return Object.entries(node)
+			.filter(([key]) => !key.startsWith("@_"))
+			.map(([, value]) => deepText(value))
+			.filter(Boolean)
+			.join(" ");
+	}
+	return "";
+}
+
 /** First non-empty text value among the given keys of a node. */
 function firstText(node: XmlObject, keys: string[]): string {
 	for (const key of keys) {
@@ -84,6 +127,9 @@ function firstText(node: XmlObject, keys: string[]): string {
 /** Strip HTML tags then normalize whitespace into clean plain text. */
 function htmlToText(html: string): string {
 	const withoutTags = html
+		// Remove script/style elements *with their contents* first — stripping
+		// only the tags would leak raw JS/CSS into the indexed text.
+		.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
 		.replace(/<br\s*\/?>(?=\s*\S)/gi, "\n")
 		.replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
 		.replace(/<[^>]+>/g, " ")
@@ -132,11 +178,17 @@ function parseRssItem(node: XmlObject): FeedItem {
 function parseAtomEntry(node: XmlObject): FeedItem {
 	const link = atomLinkHref(node.link);
 	const id = textValue(node.id) || link;
+	// `type="xhtml"` content is an element tree (object node) with an empty
+	// `#text`; fall back to a recursive text collection over it.
+	const body =
+		firstText(node, ["content", "summary"]) ||
+		deepText(node.content) ||
+		deepText(node.summary);
 	return {
 		guid: id,
 		link,
 		title: textValue(node.title),
-		content: htmlToText(firstText(node, ["content", "summary"])),
+		content: htmlToText(body),
 		publishedAt: parseDate(firstText(node, ["published", "updated"])),
 	};
 }
@@ -203,7 +255,7 @@ const MAX_FEED_BYTES = 8 * 1024 * 1024;
  */
 export async function fetchFeed(
 	url: string,
-	options: { fetchFn?: typeof fetch; signal?: AbortSignal } = {},
+	options: FetchFeedOptions = {},
 ): Promise<FetchFeedResult> {
 	return withRetry(() => fetchFeedOnce(url, options), {
 		signal: options.signal,
@@ -212,7 +264,7 @@ export async function fetchFeed(
 
 async function fetchFeedOnce(
 	url: string,
-	options: { fetchFn?: typeof fetch; signal?: AbortSignal },
+	options: FetchFeedOptions,
 ): Promise<Attempt<FetchFeedResult>> {
 	const fetchFn = options.fetchFn ?? fetch;
 	const controller = new AbortController();
@@ -228,22 +280,30 @@ async function fetchFeedOnce(
 				Accept:
 					"application/rss+xml, application/atom+xml, application/xml, text/xml; q=0.9, */*; q=0.8",
 				"User-Agent": "noledge-automation/1.0 (+feed-poller)",
+				...(options.etag ? { "If-None-Match": options.etag } : {}),
+				...(options.lastModified
+					? { "If-Modified-Since": options.lastModified }
+					: {}),
 			},
 			signal: controller.signal,
 		});
+		if (response.status === 304) {
+			return { value: { ok: true, notModified: true }, retry: false };
+		}
 		if (!response.ok) {
 			return {
 				value: { ok: false, error: `Feed returned ${response.status}.` },
 				retry: isTransientStatus(response.status),
 			};
 		}
-		const xml = await response.text();
-		if (xml.length > MAX_FEED_BYTES) {
+		const decoded = await decodeBody(response, MAX_FEED_BYTES);
+		if (!decoded.ok) {
 			return {
-				value: { ok: false, error: "Feed exceeds the size limit." },
+				value: { ok: false, error: `Feed ${decoded.error.toLowerCase()}` },
 				retry: false,
 			};
 		}
+		const xml = decoded.text;
 		if (!/<rss[\s>]|<feed[\s>]|<rdf:RDF[\s>]/i.test(xml)) {
 			return {
 				value: {
@@ -260,7 +320,16 @@ async function fetchFeedOnce(
 				retry: false,
 			};
 		}
-		return { value: { ok: true, feed }, retry: false };
+		return {
+			value: {
+				ok: true,
+				notModified: false,
+				feed,
+				etag: response.headers.get("etag"),
+				lastModified: response.headers.get("last-modified"),
+			},
+			retry: false,
+		};
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") {
 			// A caller cancellation is final; our own timeout is worth a retry.

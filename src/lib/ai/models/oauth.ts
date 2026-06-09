@@ -73,6 +73,14 @@ const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_VERSION = "1.0.11";
 const KIMI_DEVICE_TIMEOUT_MS = 15 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_MS = 60 * 1000;
+const refreshFlights = new Map<OAuthProviderId, Promise<void>>();
+
+export class OAuthInvalidGrantError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "OAuthInvalidGrantError";
+	}
+}
 
 export function isOAuthProvider(provider: string): provider is OAuthProviderId {
 	return (
@@ -166,10 +174,17 @@ function deleteState(id: string, db: Database): void {
 	db.prepare("DELETE FROM provider_oauth_states WHERE id = ?").run(id);
 }
 
+function deleteExpiredStates(db: Database): void {
+	db.prepare("DELETE FROM provider_oauth_states WHERE expires_at < ?").run(
+		Date.now(),
+	);
+}
+
 export async function startOAuth(
 	provider: OAuthProviderId,
 	db: Database = getDatabase(),
 ): Promise<OAuthStartResult> {
+	deleteExpiredStates(db);
 	if (provider === "kimi") return startKimiDevice(db);
 
 	const stateId = randomId();
@@ -394,6 +409,10 @@ export async function completeOAuth(
 	}
 	const parsed = parseCodeInput(input);
 	if (!parsed.code) return { ok: false, error: "No authorization code found." };
+	const stateRequired = row.provider === "anthropic" || parsed.source !== "raw";
+	if (stateRequired && !parsed.state) {
+		return { ok: false, error: "OAuth state missing. Start again." };
+	}
 	if (parsed.state && parsed.state !== row.state) {
 		return { ok: false, error: "OAuth state mismatch. Start again." };
 	}
@@ -409,57 +428,36 @@ export async function completeOAuth(
 	return { ok: true, provider: row.provider };
 }
 
-export async function completeOAuthCallback(
-	provider: OAuthProviderId,
-	stateValue: string,
-	code: string,
-	db: Database = getDatabase(),
-): Promise<{ ok: true } | { ok: false; error: string }> {
-	const [stateId, state] = stateValue.split(":", 2);
-	if (!stateId || !state) return { ok: false, error: "Invalid OAuth state." };
-	const row = getState(stateId, db);
-	if (
-		provider === "kimi" ||
-		!row ||
-		row.provider !== provider ||
-		row.state !== state ||
-		!row.verifier
-	) {
-		return { ok: false, error: "OAuth session expired or mismatched." };
-	}
-	const credential = await exchangeCode(
-		provider,
-		code,
-		row.verifier,
-		row.state,
-	);
-	saveProviderOAuthCredential(provider, credential, db);
-	deleteState(stateId, db);
-	return { ok: true };
-}
+type CodeInputSource = "url" | "hash" | "params" | "raw";
 
-function parseCodeInput(input: string): { code?: string; state?: string } {
+function parseCodeInput(input: string): {
+	code?: string;
+	state?: string;
+	source: CodeInputSource;
+} {
 	const value = input.trim();
-	if (!value) return {};
+	if (!value) return { source: "raw" };
 	try {
 		const url = new URL(value);
 		return {
 			code: url.searchParams.get("code") ?? undefined,
 			state: url.searchParams.get("state") ?? undefined,
+			source: "url",
 		};
 	} catch {}
 	if (value.includes("#")) {
 		const [code, state] = value.split("#", 2);
-		return { code, state };
+		return { code, state, source: "hash" };
 	}
 	if (value.includes("code=")) {
 		const params = new URLSearchParams(value);
 		return {
 			code: params.get("code") ?? undefined,
 			state: params.get("state") ?? undefined,
+			source: "params",
 		};
 	}
-	return { code: value };
+	return { code: value, source: "raw" };
 }
 
 async function exchangeCode(
@@ -544,6 +542,47 @@ async function exchangeAnthropic(
 	throw lastError ?? new Error("Anthropic token exchange failed.");
 }
 
+async function parseOAuthError(response: Response): Promise<{
+	error?: string;
+	description?: string;
+}> {
+	const text = await response.text().catch(() => "");
+	if (!text) return {};
+	try {
+		const data = JSON.parse(text) as {
+			error?: string;
+			error_description?: string;
+			message?: string;
+		};
+		return {
+			error: data.error,
+			description: data.error_description ?? data.message,
+		};
+	} catch {
+		return { description: text.slice(0, 200) };
+	}
+}
+
+async function throwRefreshError(
+	provider: OAuthProviderId,
+	response: Response,
+): Promise<never> {
+	const data = await parseOAuthError(response);
+	const message =
+		data.description ??
+		data.error ??
+		`${provider} token refresh failed (${response.status}).`;
+	if (
+		(response.status === 400 || response.status === 401) &&
+		data.error === "invalid_grant"
+	) {
+		throw new OAuthInvalidGrantError(message);
+	}
+	throw new Error(
+		`${provider} token refresh failed (${response.status}): ${message}`,
+	);
+}
+
 async function refreshOpenAI(
 	refreshToken: string,
 ): Promise<ProviderOAuthCredential> {
@@ -557,7 +596,7 @@ async function refreshOpenAI(
 		}),
 	});
 	if (!response.ok) {
-		throw new Error(`OpenAI token refresh failed (${response.status}).`);
+		await throwRefreshError("openai", response);
 	}
 	const data = (await response.json()) as {
 		access_token: string;
@@ -601,9 +640,15 @@ async function refreshAnthropic(
 				expiresAt: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
 			};
 		}
-		lastError = new Error(
-			`Anthropic token refresh failed (${response.status}).`,
-		);
+		try {
+			await throwRefreshError("anthropic", response);
+		} catch (error) {
+			if (error instanceof OAuthInvalidGrantError) throw error;
+			lastError =
+				error instanceof Error
+					? error
+					: new Error("Anthropic token refresh failed.");
+		}
 	}
 	throw lastError ?? new Error("Anthropic token refresh failed.");
 }
@@ -625,7 +670,7 @@ async function refreshKimi(
 		}).toString(),
 	});
 	if (!response.ok) {
-		throw new Error(`Kimi token refresh failed (${response.status}).`);
+		await throwRefreshError("kimi", response);
 	}
 	const data = (await response.json()) as {
 		access_token: string;
@@ -660,22 +705,39 @@ export async function refreshExpiredOAuthCredentials(
 		"anthropic",
 		"kimi",
 	] satisfies OAuthProviderId[]) {
-		const credential = getProviderOAuthCredential(provider, db);
-		if (!credential?.expires_at) continue;
-		if (credential.expires_at > Date.now() + TOKEN_REFRESH_SKEW_MS) continue;
-		if (!credential.refresh_token) {
-			deleteProviderOAuthCredential(provider, db);
+		const existingFlight = refreshFlights.get(provider);
+		if (existingFlight) {
+			await existingFlight;
 			continue;
 		}
-		try {
-			const refreshed = await refreshProvider(
-				provider,
-				credential.refresh_token,
-			);
-			saveProviderOAuthCredential(provider, refreshed, db);
-		} catch {
+		const flight = refreshExpiredOAuthCredential(provider, db).finally(() => {
+			refreshFlights.delete(provider);
+		});
+		refreshFlights.set(provider, flight);
+		await flight;
+	}
+}
+
+async function refreshExpiredOAuthCredential(
+	provider: OAuthProviderId,
+	db: Database,
+): Promise<void> {
+	const credential = getProviderOAuthCredential(provider, db);
+	if (!credential?.expires_at) return;
+	if (credential.expires_at > Date.now() + TOKEN_REFRESH_SKEW_MS) return;
+	if (!credential.refresh_token) {
+		deleteProviderOAuthCredential(provider, db);
+		return;
+	}
+	try {
+		const refreshed = await refreshProvider(provider, credential.refresh_token);
+		saveProviderOAuthCredential(provider, refreshed, db);
+	} catch (error) {
+		if (error instanceof OAuthInvalidGrantError) {
 			deleteProviderOAuthCredential(provider, db);
+			return;
 		}
+		throw error;
 	}
 }
 

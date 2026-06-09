@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
 	deleteProviderKey,
+	deleteProviderOAuthCredential,
 	maskKey,
 	PROVIDER_META,
 	resolveProviderCredential,
@@ -86,5 +87,6 @@ export async function DELETE(request: Request): Promise<Response> {
 	}
 
 	deleteProviderKey(parsed.data);
+	deleteProviderOAuthCredential(parsed.data);
 	return Response.json({ provider: statusFor(parsed.data) });
 }

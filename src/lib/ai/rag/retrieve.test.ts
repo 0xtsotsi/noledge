@@ -53,13 +53,16 @@ describe("retrieveChunks reranking", () => {
 
 		// Reranker that ranks the highest passage number first regardless of the
 		// fused score, with a relevance score derived from that number.
-		const reranker: Reranker = async (_query, chunks) =>
-			[...chunks]
-				.map((c) => {
-					const n = Number(c.documentTitle.replace("Passage ", ""));
-					return { ...c, score: n / 100 };
-				})
-				.sort((a, b) => b.score - a.score);
+		const reranker: Reranker = {
+			kind: "cohere",
+			rerank: async (_query, chunks) =>
+				[...chunks]
+					.map((c) => {
+						const n = Number(c.documentTitle.replace("Passage ", ""));
+						return { ...c, score: n / 100 };
+					})
+					.sort((a, b) => b.score - a.score),
+		};
 
 		const result = await retrieveChunks("topic", {
 			db: db as Database,
@@ -92,7 +95,7 @@ describe("retrieveChunks reranking", () => {
 			embedder,
 			topK: 3,
 			minScore: 0,
-			reranker: async (_q, chunks) => chunks,
+			reranker: { kind: "cohere", rerank: async (_q, chunks) => chunks },
 		});
 
 		expect(withDefault.ok && withIdentity.ok).toBe(true);

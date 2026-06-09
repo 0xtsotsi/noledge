@@ -25,6 +25,10 @@ export type AutomationSource = {
 	lastStatus: SourceStatus | null;
 	lastError: string | null;
 	lastItemCount: number;
+	/** HTTP validator from the last successful fetch (conditional GET). */
+	etag: string | null;
+	/** HTTP `Last-Modified` from the last successful fetch (conditional GET). */
+	lastModified: string | null;
 };
 
 export type AutomationConfig = {
@@ -45,6 +49,8 @@ type SourceRow = {
 	last_status: string | null;
 	last_error: string | null;
 	last_item_count: number;
+	etag: string | null;
+	last_modified: string | null;
 };
 
 /** Map a stored `type` string onto the typed {@link SourceType} union. */
@@ -67,6 +73,8 @@ function mapSource(row: SourceRow): AutomationSource {
 		lastStatus: (row.last_status as SourceStatus | null) ?? null,
 		lastError: row.last_error,
 		lastItemCount: row.last_item_count,
+		etag: row.etag,
+		lastModified: row.last_modified,
 	};
 }
 
@@ -231,6 +239,17 @@ export function updateSourceStatus(
 		update.polledAt ?? Date.now(),
 		id,
 	);
+}
+
+/** Persist the HTTP validators returned by a source's last successful fetch. */
+export function setSourceHttpCache(
+	id: string,
+	cache: { etag: string | null; lastModified: string | null },
+	db: Database = getDatabase(),
+): void {
+	db.prepare(
+		"UPDATE automation_sources SET etag = ?, last_modified = ? WHERE id = ?",
+	).run(cache.etag, cache.lastModified, id);
 }
 
 /**

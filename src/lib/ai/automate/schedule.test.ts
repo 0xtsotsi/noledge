@@ -49,9 +49,26 @@ describe("shouldRunNow", () => {
 		expect(shouldRunNow(config({ scheduleHour: 9 }), now)).toBe(true);
 	});
 
-	it("does not fire when the local hour does not match", () => {
+	it("does not fire before the scheduled hour", () => {
 		const now = new Date(Date.UTC(2025, 5, 1, 8, 30, 0)); // 09:30 BST
 		expect(shouldRunNow(config({ scheduleHour: 10 }), now)).toBe(false);
+	});
+
+	it("catches up after the scheduled hour when it hasn't run today", () => {
+		// Laptop asleep at 09:00, woken at 11:30 BST = 10:30 UTC.
+		const now = new Date(Date.UTC(2025, 5, 1, 10, 30, 0));
+		expect(shouldRunNow(config({ scheduleHour: 9 }), now)).toBe(true);
+	});
+
+	it("does not catch up twice: a later wake-up the same day stays quiet", () => {
+		const now = new Date(Date.UTC(2025, 5, 1, 14, 30, 0)); // 15:30 BST
+		const caughtUpEarlier = new Date(Date.UTC(2025, 5, 1, 10, 30, 0)); // 11:30 BST
+		expect(
+			shouldRunNow(
+				config({ scheduleHour: 9, lastRunAt: caughtUpEarlier.getTime() }),
+				now,
+			),
+		).toBe(false);
 	});
 
 	it("does not fire twice in the same local day", () => {

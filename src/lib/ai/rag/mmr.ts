@@ -3,8 +3,10 @@
  * relevance to the query against novelty versus already-selected items, so the
  * final list is not crowded by near-duplicate chunks.
  *
- * Similarity between candidates uses token Jaccard rather than embeddings, so the
- * pass is cheap, deterministic, and needs no extra query vectors at rerank time.
+ * Similarity between candidates uses embedding cosine when both items carry an
+ * embedding (the LangChain-standard MMR formulation), falling back to token
+ * Jaccard so the pass still works without stored vectors. Either way it is
+ * cheap, deterministic, and needs no extra query vectors at rerank time.
  */
 
 /** Default relevance/diversity tradeoff: 1 = pure relevance, 0 = pure novelty. */
@@ -16,6 +18,31 @@ const TOKEN_PATTERN = /[a-z0-9]+/g;
 export function tokenize(text: string): Set<string> {
 	const matches = text.toLowerCase().match(TOKEN_PATTERN);
 	return new Set(matches ?? []);
+}
+
+function clamp01(value: number): number {
+	if (value < 0) return 0;
+	if (value > 1) return 1;
+	return value;
+}
+
+/** L2-normalized copy of `vector`; a zero vector is returned unchanged. */
+function normalizeVector(vector: Float32Array): Float32Array {
+	let sumSquares = 0;
+	for (const value of vector) sumSquares += value * value;
+	const magnitude = Math.sqrt(sumSquares);
+	if (magnitude === 0) return vector;
+	const out = new Float32Array(vector.length);
+	for (let i = 0; i < vector.length; i += 1)
+		out[i] = (vector[i] ?? 0) / magnitude;
+	return out;
+}
+
+function dotProduct(a: Float32Array, b: Float32Array): number {
+	let total = 0;
+	const length = Math.min(a.length, b.length);
+	for (let i = 0; i < length; i += 1) total += (a[i] ?? 0) * (b[i] ?? 0);
+	return total;
 }
 
 /** Jaccard similarity `|a ∩ b| / |a ∪ b|` in `[0, 1]`; empty/empty → 0. */
@@ -41,6 +68,8 @@ export function computeMmr(
 export type MmrItem = {
 	score: number;
 	content: string;
+	/** Stored embedding for cosine similarity; omit to fall back to Jaccard. */
+	embedding?: Float32Array;
 };
 
 export type MmrOptions = {
@@ -64,6 +93,19 @@ export function mmrRerank<T extends MmrItem>(
 	if (items.length === 0 || limit <= 0) return [];
 
 	const tokens = items.map((item) => tokenize(item.content));
+	// L2-normalize once up front so pairwise cosine reduces to a dot product.
+	const units = items.map((item) =>
+		item.embedding ? normalizeVector(item.embedding) : undefined,
+	);
+	const similarity = (a: number, b: number): number => {
+		const unitA = units[a];
+		const unitB = units[b];
+		if (unitA && unitB) return clamp01(dotProduct(unitA, unitB));
+		const tokensA = tokens[a];
+		const tokensB = tokens[b];
+		if (!tokensA || !tokensB) return 0;
+		return jaccard(tokensA, tokensB);
+	};
 	const remaining = items.map((_, index) => index);
 	const selected: number[] = [];
 
@@ -75,10 +117,7 @@ export function mmrRerank<T extends MmrItem>(
 			if (index === undefined) continue;
 			let maxSim = 0;
 			for (const chosen of selected) {
-				const candidateTokens = tokens[index];
-				const chosenTokens = tokens[chosen];
-				if (!candidateTokens || !chosenTokens) continue;
-				const sim = jaccard(candidateTokens, chosenTokens);
+				const sim = similarity(index, chosen);
 				if (sim > maxSim) maxSim = sim;
 			}
 			const value = computeMmr(items[index]?.score ?? 0, maxSim, lambda);

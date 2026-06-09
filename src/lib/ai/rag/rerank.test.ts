@@ -59,7 +59,8 @@ describe("cohereReranker", () => {
 		});
 
 		const reranker = cohereReranker({ apiKey: "key" });
-		const out = await reranker("q", chunks);
+		expect(reranker.kind).toBe("cohere");
+		const out = await reranker.rerank("q", chunks);
 
 		expect(out.map((c) => c.chunkId)).toEqual(["c", "a", "b"]);
 		expect(out.map((c) => c.score)).toEqual([0.99, 0.7, 0.2]);
@@ -70,14 +71,14 @@ describe("cohereReranker", () => {
 		rerankMock.mockRejectedValue(new Error("provider down"));
 
 		const reranker = cohereReranker({ apiKey: "key" });
-		const out = await reranker("q", chunks);
+		const out = await reranker.rerank("q", chunks);
 
 		expect(out).toBe(chunks);
 	});
 
 	it("skips the network for empty input", async () => {
 		const reranker = cohereReranker({ apiKey: "key" });
-		const out = await reranker("q", []);
+		const out = await reranker.rerank("q", []);
 		expect(out).toEqual([]);
 		expect(rerankMock).not.toHaveBeenCalled();
 	});
@@ -102,11 +103,12 @@ describe("getConfiguredReranker", () => {
 
 		const reranker = getConfiguredReranker(db);
 		expect(reranker).not.toBe(identityReranker);
+		expect(reranker.kind).toBe("cohere");
 
 		rerankMock.mockResolvedValue({
 			ranking: [{ originalIndex: 0, score: 0.8, document: "alpha" }],
 		});
-		const out = await reranker("q", [chunk("a", "alpha", 0.1)]);
+		const out = await reranker.rerank("q", [chunk("a", "alpha", 0.1)]);
 		expect(out[0]?.score).toBe(0.8);
 		expect(rerankMock).toHaveBeenCalledTimes(1);
 	});

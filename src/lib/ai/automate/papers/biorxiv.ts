@@ -9,15 +9,20 @@ import type {
 
 /**
  * bioRxiv / medRxiv provider. These APIs have no keyword search, so this browses
- * the latest preprints in a recent date window and (optionally) filters by
- * `category` client-side. `query` carries the category (blank → all); the
- * `identifier` is unused. Dedup on DOI means re-polling the same window is cheap.
+ * the most recent preprints and (optionally) filters by `category` client-side.
+ * `query` carries the category (blank → all); the `identifier` is unused. Dedup
+ * on DOI means re-polling the same window is cheap.
  */
 
 export type BiorxivServer = "biorxiv" | "medrxiv";
 
-/** How far back to look for "latest" preprints, in days. */
-const WINDOW_DAYS = 30;
+/**
+ * How many of the most recent posts to browse per poll. The numeric form of the
+ * details endpoint (`/details/{server}/{N}`) returns the latest N posts — the
+ * dated-interval form pages oldest-first, so cursor 0 there returns the oldest
+ * page of the window instead of fresh preprints.
+ */
+const RECENT_POSTS = 100;
 
 type BiorxivItem = {
 	doi?: unknown;
@@ -34,10 +39,6 @@ type BiorxivResponse = {
 
 function asString(value: unknown): string {
 	return typeof value === "string" ? value : "";
-}
-
-function formatDate(ms: number): string {
-	return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** Normalize the stored query into a category filter ("" / "latest" → no filter). */
@@ -105,10 +106,7 @@ export function parseBiorxiv(
 }
 
 function buildUrl(server: BiorxivServer): string {
-	const now = Date.now();
-	const from = formatDate(now - WINDOW_DAYS * 24 * 60 * 60 * 1000);
-	const to = formatDate(now);
-	return `https://api.biorxiv.org/details/${server}/${from}/${to}/0`;
+	return `https://api.biorxiv.org/details/${server}/${RECENT_POSTS}`;
 }
 
 /** Build a provider bound to a specific preprint server. */

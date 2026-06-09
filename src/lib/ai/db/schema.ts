@@ -110,6 +110,8 @@ export function migrate(db: Database): void {
 	`);
 
 	addChunkSpanColumns(db);
+	addAutomationSourceHttpCacheColumns(db);
+	addConversationMessagePayloadColumn(db);
 	addDocumentProvenanceColumns(db);
 	createDocumentDateIndex(db);
 	createChunksFts(db);
@@ -164,6 +166,39 @@ function addDocumentProvenanceColumns(db: Database): void {
 	db.exec(
 		"CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash) WHERE content_hash IS NOT NULL",
 	);
+}
+
+/**
+ * Add nullable HTTP-validator columns (`etag`, `last_modified`) to
+ * `automation_sources` if absent. They enable conditional GETs (304 → skip
+ * re-downloading an unchanged feed) on subsequent polls.
+ */
+function addAutomationSourceHttpCacheColumns(db: Database): void {
+	const columns = db.prepare("PRAGMA table_info(automation_sources)").all() as {
+		name: string;
+	}[];
+	const present = new Set(columns.map((column) => column.name));
+	if (!present.has("etag")) {
+		db.exec("ALTER TABLE automation_sources ADD COLUMN etag TEXT");
+	}
+	if (!present.has("last_modified")) {
+		db.exec("ALTER TABLE automation_sources ADD COLUMN last_modified TEXT");
+	}
+}
+
+/**
+ * Add a nullable `payload` JSON column to `conversation_messages` if absent.
+ * It carries structured assistant-turn extras (`{ reasoning?, sources?, steps? }`)
+ * while `content` stays the flat text; old rows simply have NULL.
+ */
+function addConversationMessagePayloadColumn(db: Database): void {
+	const columns = db
+		.prepare("PRAGMA table_info(conversation_messages)")
+		.all() as { name: string }[];
+	const present = new Set(columns.map((column) => column.name));
+	if (!present.has("payload")) {
+		db.exec("ALTER TABLE conversation_messages ADD COLUMN payload TEXT");
+	}
 }
 
 /**

@@ -55,6 +55,46 @@ describe("mmrRerank", () => {
 		expect(out.map((item) => item.score)).toEqual([0.9, 0.6, 0.3]);
 	});
 
+	it("uses embedding cosine to demote a paraphrase the tokens cannot catch", () => {
+		// #1 and #2 are paraphrases: near-identical embeddings but almost no
+		// token overlap, so only the cosine path can spot the duplicate.
+		const items = [
+			{
+				score: 1.0,
+				content: "the cat sat on the mat",
+				embedding: new Float32Array([1, 0.02, 0]),
+			},
+			{
+				score: 0.95,
+				content: "a feline rested upon its rug",
+				embedding: new Float32Array([1, 0, 0.02]),
+			},
+			{
+				score: 0.9,
+				content: "quarterly finance report shows revenue",
+				embedding: new Float32Array([0, 1, 0]),
+			},
+		];
+		const out = mmrRerank(items, { lambda: 0.5, limit: 2 });
+		expect(out[0]?.content).toBe("the cat sat on the mat");
+		expect(out[1]?.content).toBe("quarterly finance report shows revenue");
+	});
+
+	it("falls back to Jaccard when an item has no embedding", () => {
+		const items = [
+			{
+				score: 1.0,
+				content: "the quick brown fox jumps",
+				embedding: new Float32Array([1, 0]),
+			},
+			{ score: 0.95, content: "the quick brown fox jumps over" }, // near-dup, no embedding
+			{ score: 0.9, content: "lazy dogs sleep all afternoon" },
+		];
+		const out = mmrRerank(items, { lambda: 0.5, limit: 2 });
+		expect(out[0]?.content).toBe("the quick brown fox jumps");
+		expect(out[1]?.content).toBe("lazy dogs sleep all afternoon");
+	});
+
 	it("returns empty for empty input or non-positive limit", () => {
 		expect(mmrRerank([], {})).toEqual([]);
 		expect(mmrRerank([{ score: 1, content: "x" }], { limit: 0 })).toEqual([]);

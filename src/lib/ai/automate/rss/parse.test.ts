@@ -54,6 +54,22 @@ describe("parseFeed (RSS)", () => {
 		expect(second?.content).toContain("summary");
 		expect(second?.publishedAt).toBeNull();
 	});
+
+	it("strips script and style contents from item bodies", () => {
+		const feed = parseFeed(`<?xml version="1.0"?>
+<rss version="2.0"><channel><title>T</title>
+	<item>
+		<title>Scripted</title>
+		<link>https://example.com/s</link>
+		<description><![CDATA[<p>Visible prose.</p><script>var tracked = "secret";</script><style>.a { color: red; }</style><p>More prose.</p>]]></description>
+	</item>
+</channel></rss>`);
+		const [item] = feed.items;
+		expect(item?.content).toContain("Visible prose.");
+		expect(item?.content).toContain("More prose.");
+		expect(item?.content).not.toContain("tracked");
+		expect(item?.content).not.toContain("color: red");
+	});
 });
 
 const RDF_SAMPLE = `<?xml version="1.0"?>
@@ -95,6 +111,27 @@ describe("parseFeed (Atom)", () => {
 		expect(entry?.content).toContain("Body of the entry");
 		expect(entry?.publishedAt).toBe(Date.parse("2025-06-01T12:30:00Z"));
 	});
+
+	it("collects xhtml-typed content from its div element tree", () => {
+		const feed = parseFeed(`<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Xhtml Feed</title>
+	<entry>
+		<title>Xhtml Entry</title>
+		<id>urn:uuid:xhtml-1</id>
+		<link rel="alternate" href="https://example.org/xhtml"/>
+		<content type="xhtml">
+			<div xmlns="http://www.w3.org/1999/xhtml">
+				<p>First xhtml paragraph.</p>
+				<p>Second <em>emphasised</em> paragraph.</p>
+			</div>
+		</content>
+	</entry>
+</feed>`);
+		const [entry] = feed.items;
+		expect(entry?.content).toContain("First xhtml paragraph.");
+		expect(entry?.content).toContain("emphasised");
+	});
 });
 
 describe("fetchFeed retry", () => {
@@ -109,7 +146,46 @@ describe("fetchFeed retry", () => {
 		const result = await fetchFeed("https://b.example/feed.xml", { fetchFn });
 		expect(fetchFn).toHaveBeenCalledTimes(2);
 		expect(result.ok).toBe(true);
-		if (result.ok) expect(result.feed.title).toBe("Example Blog");
+		if (result.ok && !result.notModified) {
+			expect(result.feed.title).toBe("Example Blog");
+		}
+	});
+
+	it("sends stored validators and treats 304 as not modified", async () => {
+		const fetchFn = vi.fn(
+			async () => new Response(null, { status: 304 }),
+		) as unknown as typeof fetch;
+
+		const result = await fetchFeed("https://b.example/feed.xml", {
+			fetchFn,
+			etag: '"v1"',
+			lastModified: "Tue, 09 Jun 2026 00:00:00 GMT",
+		});
+
+		const headers = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock
+			.calls[0]?.[1]?.headers as Record<string, string>;
+		expect(headers["If-None-Match"]).toBe('"v1"');
+		expect(headers["If-Modified-Since"]).toBe("Tue, 09 Jun 2026 00:00:00 GMT");
+		expect(result).toEqual({ ok: true, notModified: true });
+	});
+
+	it("returns response validators on a 200", async () => {
+		const fetchFn = vi.fn(
+			async () =>
+				new Response(RSS_SAMPLE, {
+					status: 200,
+					headers: {
+						ETag: '"v2"',
+						"Last-Modified": "Wed, 10 Jun 2026 00:00:00 GMT",
+					},
+				}),
+		) as unknown as typeof fetch;
+
+		const result = await fetchFeed("https://b.example/feed.xml", { fetchFn });
+		expect(result.ok).toBe(true);
+		if (!result.ok || result.notModified) return;
+		expect(result.etag).toBe('"v2"');
+		expect(result.lastModified).toBe("Wed, 10 Jun 2026 00:00:00 GMT");
 	});
 
 	it("does not retry a deterministic 404", async () => {

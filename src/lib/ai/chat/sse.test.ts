@@ -13,6 +13,7 @@ function decode(chunk: ChatStreamChunk): ChatStreamChunk {
 describe("encodeChunk", () => {
 	it("round-trips every chunk variant", () => {
 		const variants: ChatStreamChunk[] = [
+			{ type: "conversation", id: "c-1" },
 			{ type: "reasoning", text: "thinking" },
 			{ type: "step", step: { id: "s1", label: "L", detail: "D" } },
 			{ type: "text", text: "hello" },
@@ -20,7 +21,7 @@ describe("encodeChunk", () => {
 				type: "source",
 				source: { id: "1", href: "#1", title: "T", description: "D" },
 			},
-			{ type: "image", url: "http://x/y.png", alt: "alt" },
+			{ type: "error", message: "Something went wrong" },
 			{ type: "done" },
 		];
 

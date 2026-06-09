@@ -12,12 +12,13 @@
  * the whole request.
  */
 
+import { createHash } from "node:crypto";
 import type {
 	ImagePart,
 	FilePart as ModelFilePart,
 	ModelMessage,
 	TextPart,
-} from "@ai-sdk/provider-utils";
+} from "ai";
 import type { ChatMessage } from "@/lib/ai/chat/sse";
 import { extractText } from "@/lib/ai/rag/extract";
 
@@ -126,10 +127,59 @@ function noteBlock(name: string, reason: string): TextPart {
 	return { type: "text", text: `\n\n[Attachment: ${name} — ${reason}]` };
 }
 
+function isPdf(mediaType: string, filename: string): boolean {
+	return mediaType === "application/pdf" || extensionOf(filename) === "pdf";
+}
+
+type ResolveOptions = {
+	supportsVision: boolean;
+	/** Forward PDFs natively as file parts instead of extracting text. */
+	supportsPdf?: boolean;
+	signal?: AbortSignal;
+};
+
+/**
+ * Bounded LRU cache of resolved file parts, keyed on content hash + model
+ * capabilities. Attachments ride on every turn of a conversation, so without
+ * this a large PDF would be re-extracted/re-OCR'd on each send.
+ */
+const resolvedPartsCache = new Map<
+	string,
+	Array<TextPart | ImagePart | ModelFilePart>
+>();
+const RESOLVED_PARTS_CACHE_MAX = 32;
+
+function cacheKey(data: string, opts: ResolveOptions): string {
+	const hash = createHash("sha256").update(data).digest("hex");
+	return `${hash}:${opts.supportsVision ? 1 : 0}${opts.supportsPdf ? 1 : 0}`;
+}
+
+function cacheGet(
+	key: string,
+): Array<TextPart | ImagePart | ModelFilePart> | undefined {
+	const hit = resolvedPartsCache.get(key);
+	if (!hit) return undefined;
+	// Refresh recency so hot attachments survive eviction.
+	resolvedPartsCache.delete(key);
+	resolvedPartsCache.set(key, hit);
+	return hit;
+}
+
+function cacheSet(
+	key: string,
+	parts: Array<TextPart | ImagePart | ModelFilePart>,
+): void {
+	resolvedPartsCache.set(key, parts);
+	if (resolvedPartsCache.size > RESOLVED_PARTS_CACHE_MAX) {
+		const oldest = resolvedPartsCache.keys().next().value;
+		if (oldest !== undefined) resolvedPartsCache.delete(oldest);
+	}
+}
+
 /** Resolve one file part into one or more model content parts. */
 async function resolveFilePart(
 	part: { name: string; mediaType: string; data: string },
-	opts: { supportsVision: boolean; signal?: AbortSignal },
+	opts: ResolveOptions,
 ): Promise<Array<TextPart | ImagePart | ModelFilePart>> {
 	if (base64ByteLength(part.data) > MAX_ATTACHMENT_BYTES) {
 		return [noteBlock(part.name, "skipped, file too large")];
@@ -143,6 +193,17 @@ async function resolveFilePart(
 	}
 	if (buffer.byteLength === 0) {
 		return [noteBlock(part.name, "empty file")];
+	}
+
+	if (opts.supportsPdf && isPdf(part.mediaType, part.name)) {
+		return [
+			{
+				type: "file",
+				data: buffer,
+				mediaType: "application/pdf",
+				filename: part.name,
+			},
+		];
 	}
 
 	const image = isImage(part.mediaType, part.name);
@@ -204,7 +265,7 @@ async function resolveFilePart(
  */
 export async function buildModelMessages(
 	messages: ChatMessage[],
-	opts: { supportsVision: boolean; signal?: AbortSignal },
+	opts: ResolveOptions,
 ): Promise<ModelMessage[]> {
 	const result: ModelMessage[] = [];
 	let totalBytes = 0;
@@ -240,7 +301,15 @@ export async function buildModelMessages(
 				continue;
 			}
 			totalBytes += size;
-			content.push(...(await resolveFilePart(file, opts)));
+			const key = cacheKey(file.data, opts);
+			const cached = cacheGet(key);
+			if (cached) {
+				content.push(...cached);
+				continue;
+			}
+			const resolved = await resolveFilePart(file, opts);
+			cacheSet(key, resolved);
+			content.push(...resolved);
 		}
 
 		if (content.length === 0) content.push({ type: "text", text: "" });

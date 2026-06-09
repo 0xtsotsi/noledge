@@ -32,7 +32,12 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /** One attempt's outcome plus whether it's worth retrying. */
-export type Attempt<T> = { value: T; retry: boolean };
+export type Attempt<T> = {
+	value: T;
+	retry: boolean;
+	/** Server-requested wait (e.g. `Retry-After`); overrides the default backoff. */
+	retryAfterMs?: number;
+};
 
 /**
  * Run `attempt` up to {@link RETRY_ATTEMPTS} times, backing off between tries
@@ -49,7 +54,7 @@ export async function withRetry<T>(
 
 	let last = await attempt();
 	for (let i = 2; i <= attempts && last.retry; i += 1) {
-		await sleep(backoffMs * (i - 1), options.signal);
+		await sleep(last.retryAfterMs ?? backoffMs * (i - 1), options.signal);
 		if (options.signal?.aborted) break;
 		last = await attempt();
 	}

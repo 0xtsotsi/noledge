@@ -7,16 +7,22 @@ import type { RetrievedChunk } from "./retrieve";
 /**
  * A reranker reorders (and may trim) retrieved chunks for a query, e.g. with a
  * cross-encoder or a hosted relevance API. It runs over the candidate pool in
- * {@link retrieveChunks} before the final MMR/top-k slice.
+ * {@link retrieveChunks} before the final MMR/top-k slice. The `kind`
+ * discriminant lets retrieval detect the no-op identity reranker without
+ * relying on reference equality.
  *
  * Implementations must honor `signal` for cancellation and should return the
  * input unchanged on failure rather than throwing, so retrieval stays resilient.
  */
-export type Reranker = (
-	query: string,
-	chunks: RetrievedChunk[],
-	signal?: AbortSignal,
-) => Promise<RetrievedChunk[]>;
+export type Reranker = {
+	kind: "identity" | "cohere";
+	rerank(
+		query: string,
+		chunks: RetrievedChunk[],
+		signal?: AbortSignal,
+		topN?: number,
+	): Promise<RetrievedChunk[]>;
+};
 
 /** Default Cohere cross-encoder model used when none is configured. */
 export const DEFAULT_RERANK_MODEL = "rerank-v3.5";
@@ -25,7 +31,10 @@ export const DEFAULT_RERANK_MODEL = "rerank-v3.5";
  * Default reranker: returns chunks untouched. Used when reranking is disabled,
  * unconfigured, or as a graceful fallback on any provider error.
  */
-export const identityReranker: Reranker = async (_query, chunks) => chunks;
+export const identityReranker: Reranker = {
+	kind: "identity",
+	rerank: async (_query, chunks) => chunks,
+};
 
 /**
  * Build a Cohere cross-encoder reranker. It reorders the input chunks by the
@@ -41,25 +50,29 @@ export function cohereReranker(opts: {
 }): Reranker {
 	const cohere = createCohere({ apiKey: opts.apiKey });
 	const modelId = opts.model ?? DEFAULT_RERANK_MODEL;
-	return async (query, chunks, signal) => {
-		if (chunks.length === 0) return chunks;
-		try {
-			const { ranking } = await rerank({
-				model: cohere.reranking(modelId),
-				documents: chunks.map((chunk) => chunk.content),
-				query,
-				...(signal ? { abortSignal: signal } : {}),
-			});
-			const reordered: RetrievedChunk[] = [];
-			for (const item of ranking) {
-				const chunk = chunks[item.originalIndex];
-				if (!chunk) continue;
-				reordered.push({ ...chunk, score: item.score });
+	return {
+		kind: "cohere",
+		rerank: async (query, chunks, signal, topN) => {
+			if (chunks.length === 0) return chunks;
+			try {
+				const { ranking } = await rerank({
+					model: cohere.reranking(modelId),
+					documents: chunks.map((chunk) => chunk.content),
+					query,
+					...(topN !== undefined ? { topN } : {}),
+					...(signal ? { abortSignal: signal } : {}),
+				});
+				const reordered: RetrievedChunk[] = [];
+				for (const item of ranking) {
+					const chunk = chunks[item.originalIndex];
+					if (!chunk) continue;
+					reordered.push({ ...chunk, score: item.score });
+				}
+				return reordered.length > 0 ? reordered : chunks;
+			} catch {
+				return chunks;
 			}
-			return reordered.length > 0 ? reordered : chunks;
-		} catch {
-			return chunks;
-		}
+		},
 	};
 }
 

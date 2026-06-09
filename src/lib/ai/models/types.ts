@@ -34,6 +34,12 @@ export type ModelCatalogEntry = {
 	 * text server-side so even text-only models receive their content.
 	 */
 	vision?: boolean;
+	/**
+	 * Whether the provider accepts PDF documents natively as file parts. When
+	 * true, PDF attachments are forwarded verbatim instead of being extracted to
+	 * text server-side.
+	 */
+	pdf?: boolean;
 };
 
 /**
@@ -43,12 +49,22 @@ export type ModelCatalogEntry = {
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 	// Anthropic
 	{
+		id: "claude-fable-5",
+		provider: "anthropic",
+		label: "Claude Fable 5",
+		default: false,
+		reasoning: true,
+		vision: true,
+		pdf: true,
+	},
+	{
 		id: "claude-opus-4-8",
 		provider: "anthropic",
 		label: "Claude Opus 4.8",
 		default: true,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	{
 		id: "claude-sonnet-4-6",
@@ -57,6 +73,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: false,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	{
 		id: "claude-haiku-4-5-20251001",
@@ -65,6 +82,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: false,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	// OpenAI / Codex family
 	{
@@ -74,6 +92,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: true,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	{
 		id: "gpt-5.4",
@@ -82,6 +101,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: false,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	{
 		id: "gpt-5.4-mini",
@@ -90,6 +110,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: false,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	{
 		id: "gpt-5.3-codex",
@@ -98,6 +119,7 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
 		default: false,
 		reasoning: true,
 		vision: true,
+		pdf: true,
 	},
 	// Gemini (OpenAI-compatible endpoint)
 	{

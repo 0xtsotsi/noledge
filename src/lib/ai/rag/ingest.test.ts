@@ -106,8 +106,9 @@ describe("ingest + retrieve", () => {
 
 		// The fake embedder makes non-matching topics orthogonal (cosine
 		// distance 1.0); a strict ceiling must keep only the cat chunk even
-		// though topK asks for more.
-		const retrieved = await retrieveChunks("Tell me about the cat", {
+		// though topK asks for more. (Keyword hits bypass the ceiling by design,
+		// so the query avoids stopwords shared with the other docs.)
+		const retrieved = await retrieveChunks("cat", {
 			db,
 			embedder,
 			topK: 3,
@@ -185,6 +186,48 @@ describe("ingest + retrieve", () => {
 		if (!retrieved.ok) return;
 		const titles = retrieved.chunks.map((chunk) => chunk.documentTitle);
 		expect(titles).toContain("Errors");
+	});
+
+	it("keeps keyword-only hits beyond FTS rank 1 (RRF fusion regression)", async () => {
+		db = openDatabase(":memory:");
+		const docs = [
+			// Mentions the token twice so bm25 ranks it first in the keyword arm.
+			{
+				title: "CatLog",
+				text: "Diagnostics cat log recorded ERRX9213 then ERRX9213 again.",
+			},
+			// Single mention → keyword rank 2+; the vector arm cannot represent
+			// the token at all, so only RRF fusion can keep this hit alive.
+			{
+				title: "FinanceLog",
+				text: "Finance batch failed with ERRX9213 overnight.",
+			},
+		];
+		for (const doc of docs) {
+			await ingestDocument(
+				{
+					data: Buffer.from(doc.text, "utf8"),
+					filename: `${doc.title}.txt`,
+					mime: "text/plain",
+					title: doc.title,
+				},
+				{ db, embedder, chunkOptions: { size: 1000, overlap: 0 } },
+			);
+		}
+
+		// Query embeds to the fallback axis (orthogonal to every doc), so both
+		// hits are keyword-only. The non-top FTS hit must survive the default
+		// minScore — the old linear fusion discarded every FTS hit but rank 1.
+		const retrieved = await retrieveChunks("ERRX9213", {
+			db,
+			embedder,
+			topK: 3,
+		});
+		expect(retrieved.ok).toBe(true);
+		if (!retrieved.ok) return;
+		const titles = retrieved.chunks.map((chunk) => chunk.documentTitle);
+		expect(titles).toContain("CatLog");
+		expect(titles).toContain("FinanceLog");
 	});
 
 	it("ranks a chunk strong in both arms above one strong in a single arm", async () => {

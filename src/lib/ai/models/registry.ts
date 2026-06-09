@@ -31,6 +31,8 @@ export type ResolveModelResult =
 			reasoning: boolean;
 			/** Whether the resolved model accepts native image inputs. */
 			supportsVision: boolean;
+			/** Whether the resolved model accepts PDF documents natively. */
+			supportsPdf: boolean;
 			/** Provider-specific options (e.g. enabling thinking/reasoning summaries). */
 			providerOptions: ProviderOptions | undefined;
 			provider: ProviderId;
@@ -216,6 +218,7 @@ export function resolveModel(
 		model: instantiate(entry),
 		reasoning: entry.reasoning ?? false,
 		supportsVision: entry.vision ?? false,
+		supportsPdf: entry.pdf ?? false,
 		providerOptions: reasoningProviderOptions(entry, thinkingEnabled),
 		provider: entry.provider,
 		credentialSource: credential.source,

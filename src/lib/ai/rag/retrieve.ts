@@ -1,14 +1,14 @@
 import type { Database } from "better-sqlite3";
 import { getDatabase } from "@/lib/ai/db/client";
-import { embedTexts, toVectorBlob } from "@/lib/ai/embeddings/embed";
+import {
+	blobToVector,
+	embedTexts,
+	toVectorBlob,
+} from "@/lib/ai/embeddings/embed";
 import type { Embedder } from "./ingest";
 import { keywordSearch } from "./keyword";
 import { mmrRerank } from "./mmr";
-import {
-	getConfiguredReranker,
-	identityReranker,
-	type Reranker,
-} from "./rerank";
+import { getConfiguredReranker, type Reranker } from "./rerank";
 
 export type RetrievedChunk = {
 	chunkId: string;
@@ -18,7 +18,7 @@ export type RetrievedChunk = {
 	/** Best cosine distance from the vector arm (0 = identical). Infinity if the
 	 * chunk surfaced only via the keyword arm. */
 	distance: number;
-	/** Combined normalized relevance score in `[0, 1]` (higher = better). */
+	/** Fused RRF relevance score normalized to `[0, 1]` (higher = better). */
 	score: number;
 	/** Char offset of the chunk's start in the source document, if recorded. */
 	start?: number;
@@ -41,8 +41,10 @@ export type RetrieveOptions = {
 	embedder?: Embedder;
 	topK?: number;
 	/**
-	 * Minimum combined score (`[0, 1]`) for a chunk to be returned. Filters out
-	 * clearly-unrelated matches. Defaults to a permissive 0.3.
+	 * Minimum cosine similarity (`[0, 1]`) the vector arm must report for a
+	 * candidate that has no keyword hit. Keyword-arm hits are never dropped by
+	 * this threshold — a unique token match is relevant regardless of its
+	 * embedding distance. Defaults to a permissive 0.3.
 	 */
 	minScore?: number;
 	/**
@@ -51,9 +53,9 @@ export type RetrieveOptions = {
 	 * callers keep their behavior.
 	 */
 	maxDistance?: number;
-	/** Weight of the semantic (vector) arm before normalization. Default 0.7. */
+	/** RRF weight of the semantic (vector) arm before normalization. Default 0.7. */
 	vectorWeight?: number;
-	/** Weight of the keyword (FTS5) arm before normalization. Default 0.3. */
+	/** RRF weight of the keyword (FTS5) arm before normalization. Default 0.3. */
 	textWeight?: number;
 	/** Run the FTS5 keyword arm and fuse it with vectors. Default true. */
 	hybrid?: boolean;
@@ -74,6 +76,8 @@ const DEFAULT_MIN_SCORE = 0.3;
 const RERANK_POOL_SIZE = 30;
 const DEFAULT_VECTOR_WEIGHT = 0.7;
 const DEFAULT_TEXT_WEIGHT = 0.3;
+/** Standard reciprocal-rank-fusion constant (Cormack et al.; used by LangChain). */
+const RRF_K = 60;
 
 type VectorRow = {
 	chunk_id: string;
@@ -111,8 +115,12 @@ type Candidate = {
 	createdAt: number;
 	publishedAt: number | null;
 	documentDate: number;
+	/** Cosine similarity from the vector arm; 0 when keyword-only. */
 	vScore: number;
-	tScore: number;
+	/** 0-based rank in the vector arm's ordering, or null if absent. */
+	vRank: number | null;
+	/** 0-based rank in the keyword arm's ordering, or null if absent. */
+	tRank: number | null;
 };
 
 function clamp01(value: number): number {
@@ -148,9 +156,10 @@ function buildDateWhere(options: RetrieveOptions): {
 
 /**
  * Retrieve the top-k most relevant chunks for a query via hybrid keyword+vector
- * retrieval: overfetch candidates from each arm, normalize and fuse their scores,
- * filter by `minScore`, diversify with MMR, slice to `topK`, then rerank. Returns
- * a `Result`.
+ * retrieval: overfetch candidates from each arm, fuse their rankings with
+ * weighted reciprocal-rank fusion (RRF), filter vector-only candidates by
+ * `minScore`, diversify with MMR, slice to `topK`, then rerank. Returns a
+ * `Result`.
  */
 export async function retrieveChunks(
 	query: string,
@@ -219,7 +228,7 @@ export async function retrieveChunks(
 				...dateWhere.params,
 			) as VectorRow[];
 
-		for (const row of vectorRows) {
+		vectorRows.forEach((row, rank) => {
 			candidates.set(row.chunk_id, {
 				chunkId: row.chunk_id,
 				documentId: row.document_id,
@@ -232,11 +241,12 @@ export async function retrieveChunks(
 				publishedAt: row.published_at,
 				documentDate: row.document_date,
 				vScore: clamp01(1 - row.distance),
-				tScore: 0,
+				vRank: rank,
+				tRank: null,
 			});
-		}
+		});
 
-		// Keyword arm: FTS5 overfetch → min-max normalized rank → tScore.
+		// Keyword arm: FTS5 overfetch, best-first → 0-based rank per hit.
 		if (hybrid) {
 			const hits = keywordSearch(db, trimmed, candidateK, {
 				...(options.dateFrom !== undefined
@@ -245,11 +255,6 @@ export async function retrieveChunks(
 				...(options.dateTo !== undefined ? { dateTo: options.dateTo } : {}),
 			});
 			if (hits.length > 0) {
-				const ranks = hits.map((hit) => hit.rank);
-				const minRank = Math.min(...ranks);
-				const maxRank = Math.max(...ranks);
-				const span = maxRank - minRank;
-
 				const getChunk = db.prepare(
 					`SELECT
 						c.id          AS id,
@@ -266,18 +271,16 @@ export async function retrieveChunks(
 					WHERE c.id = ?${dateWhere.clause}`,
 				);
 
-				for (const hit of hits) {
-					// More negative rank = better; map best → 1, worst → 0.
-					const tScore = span === 0 ? 1 : (maxRank - hit.rank) / span;
+				hits.forEach((hit, rank) => {
 					const existing = candidates.get(hit.chunkId);
 					if (existing) {
-						existing.tScore = tScore;
-						continue;
+						existing.tRank = rank;
+						return;
 					}
 					const row = getChunk.get(hit.chunkId, ...dateWhere.params) as
 						| ChunkRow
 						| undefined;
-					if (!row) continue;
+					if (!row) return;
 					candidates.set(hit.chunkId, {
 						chunkId: row.id,
 						documentId: row.document_id,
@@ -290,20 +293,38 @@ export async function retrieveChunks(
 						publishedAt: row.published_at,
 						documentDate: row.document_date,
 						vScore: 0,
-						tScore,
+						vRank: null,
+						tRank: rank,
 					});
-				}
+				});
 			}
 		}
 
-		// Fuse → filter by minScore → sort by combined score.
-		const scored = [...candidates.values()]
-			.map((candidate) => ({
-				candidate,
-				score: vectorWeight * candidate.vScore + textWeight * candidate.tScore,
-			}))
-			.filter((entry) => entry.score >= minScore)
+		// Weighted RRF: each arm contributes weight / (RRF_K + rank). Normalized to
+		// [0, 1] by the maximum possible fused value (both arms at rank 0), so
+		// downstream MMR relevance stays in range.
+		const maxFused = (vectorWeight + textWeight) / RRF_K;
+		const fused = [...candidates.values()]
+			.map((candidate) => {
+				const raw =
+					(candidate.vRank !== null
+						? vectorWeight / (RRF_K + candidate.vRank)
+						: 0) +
+					(candidate.tRank !== null
+						? textWeight / (RRF_K + candidate.tRank)
+						: 0);
+				return { candidate, score: maxFused === 0 ? 0 : raw / maxFused };
+			})
 			.sort((a, b) => b.score - a.score);
+
+		// minScore is a cosine-similarity floor on the vector arm only: a candidate
+		// with a keyword hit always survives (a unique token match is relevant no
+		// matter how far its embedding lands), while vector-only candidates below
+		// the floor are clearly-unrelated noise.
+		const scored = fused.filter(
+			(entry) =>
+				entry.candidate.tRank !== null || entry.candidate.vScore >= minScore,
+		);
 
 		type ScoredEntry = (typeof scored)[number];
 
@@ -325,26 +346,57 @@ export async function retrieveChunks(
 			documentDate: entry.candidate.documentDate,
 		});
 
-		const sliceFinal = (entries: ScoredEntry[]): ScoredEntry[] =>
-			useMmr
-				? mmrRerank(
-						entries.map((entry) => ({
-							score: entry.score,
-							content: entry.candidate.content,
-							entry,
-						})),
-						{ limit: topK },
-					).map((item) => item.entry)
-				: entries.slice(0, topK);
+		// Stored embeddings for the (small) final pool, so MMR can measure
+		// candidate-vs-candidate similarity with real cosine instead of Jaccard.
+		const fetchPoolEmbeddings = (
+			entries: ScoredEntry[],
+		): Map<string, Float32Array> => {
+			if (entries.length === 0) return new Map();
+			const ids = entries.map((entry) => entry.candidate.chunkId);
+			const placeholders = ids.map(() => "?").join(", ");
+			const rows = db
+				.prepare(
+					`SELECT chunk_id, embedding FROM vec_chunks WHERE chunk_id IN (${placeholders})`,
+				)
+				.all(...ids) as { chunk_id: string; embedding: Buffer }[];
+			return new Map(
+				rows.map((row) => [row.chunk_id, blobToVector(row.embedding)]),
+			);
+		};
 
-		// When a real reranker is active, rerank the larger candidate pool first so a
-		// strong passage outside the naive top-k can be promoted, then MMR/slice over
-		// the reranked order. The identity (default) path stays byte-for-byte
-		// identical to today: MMR/slice the fused order directly.
-		if (reranker !== identityReranker) {
-			const pool = scored.slice(0, Math.min(RERANK_POOL_SIZE, scored.length));
+		// Note: after a real reranker ran, `entry.score` is the rerank relevance
+		// score — MMR consumes it directly as the relevance term.
+		const sliceFinal = (entries: ScoredEntry[]): ScoredEntry[] => {
+			if (!useMmr) return entries.slice(0, topK);
+			const embeddings = fetchPoolEmbeddings(entries);
+			return mmrRerank(
+				entries.map((entry) => {
+					const embedding = embeddings.get(entry.candidate.chunkId);
+					return {
+						score: entry.score,
+						content: entry.candidate.content,
+						...(embedding ? { embedding } : {}),
+						entry,
+					};
+				}),
+				{ limit: topK },
+			).map((item) => item.entry);
+		};
+
+		// When a real reranker is active, rerank the pre-filter fused pool so a
+		// strong passage the cosine floor would have dropped can still be promoted
+		// by the cross-encoder; the threshold then applies to the rerank score
+		// instead. The identity (default) path filters first and MMR/slices the
+		// fused order directly.
+		if (reranker.kind !== "identity") {
+			const pool = fused.slice(0, Math.min(RERANK_POOL_SIZE, fused.length));
 			const poolChunks = pool.map(toRetrievedChunk);
-			const rerankedPool = await reranker(trimmed, poolChunks, options.signal);
+			const rerankedPool = await reranker.rerank(
+				trimmed,
+				poolChunks,
+				options.signal,
+				candidateK,
+			);
 
 			// Map reranked chunks back to scored entries, applying the rerank score.
 			const byChunkId = new Map(
@@ -360,7 +412,9 @@ export async function retrieveChunks(
 				});
 			}
 
-			const selected = sliceFinal(rerankedEntries);
+			const selected = sliceFinal(
+				rerankedEntries.filter((entry) => entry.score >= minScore),
+			);
 			return { ok: true, chunks: selected.map(toRetrievedChunk) };
 		}
 

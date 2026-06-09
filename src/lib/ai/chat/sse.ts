@@ -46,11 +46,12 @@ export type ChatReasoningStep = {
 
 /** Server-Sent event payloads streamed to the client. */
 export type ChatStreamChunk =
+	| { type: "conversation"; id: string }
 	| { type: "reasoning"; text: string }
 	| { type: "step"; step: ChatReasoningStep }
 	| { type: "text"; text: string }
 	| { type: "source"; source: ChatSource }
-	| { type: "image"; url: string; alt: string }
+	| { type: "error"; message: string }
 	| { type: "done" };
 
 const encoder = new TextEncoder();

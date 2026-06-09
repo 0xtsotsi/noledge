@@ -160,7 +160,9 @@ async function fetchArticles(
 		db: "pubmed",
 		term,
 		retmax: String(limit),
-		sort: "pub+date",
+		// NB: must be the underscore form — URLSearchParams percent-encodes "+",
+		// so "pub+date" would reach E-utilities as the literal value "pub+date".
+		sort: "pub_date",
 		retmode: "json",
 	});
 	const search = await httpText(

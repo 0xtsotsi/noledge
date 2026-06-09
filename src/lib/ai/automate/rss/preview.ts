@@ -21,6 +21,10 @@ export async function previewFeed(
 ): Promise<RssPreviewResult> {
 	const result = await fetchFeed(url, { signal });
 	if (!result.ok) return { ok: false, error: result.error };
+	// No validators are sent here, so a 304 can only mean a misbehaving server.
+	if (result.notModified) {
+		return { ok: false, error: "Feed returned 304 without validators." };
+	}
 
 	const { feed } = result;
 	return {
