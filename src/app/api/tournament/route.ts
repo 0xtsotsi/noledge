@@ -53,8 +53,8 @@ export async function POST(request: Request): Promise<Response> {
 	const { objectName, recordId } = parsed.data;
 	const userPrompt = `Analyse the ${objectName} ${recordId}. What is your position on whether the deal is ready to advance? Cite specific timeline entries and documents.`;
 
-	const conservativeModel = anthropic("claude-fable-5");
-	const aggressiveModel = anthropic("claude-fable-5"); // Both same in dev; v2 uses opus
+	const conservativeModel = anthropic("claude-sonnet-4-6");
+	const aggressiveModel = anthropic("claude-opus-4-8");
 
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream<Uint8Array>({
