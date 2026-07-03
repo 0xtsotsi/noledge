@@ -95,6 +95,67 @@ type AssistantPayload = {
 };
 
 /**
+ * Default user id for the single-user Noledge deployment. Feature 5 (AI
+ * Recall) keys cross-account memory on `conversations.user_id`; multi-user
+ * setups will plumb a per-request id from the auth layer into this constant
+ * (or replace it with a function). For v1 everything is "default".
+ */
+const DEFAULT_USER_ID = "default";
+
+/**
+ * Persist a one-sentence summary of the (user question → assistant answer)
+ * pair into `recall_user_context` so the cross-memory search
+ * (`src/lib/ai/search/cross-memory.ts`) can find it later. Fire-and-forget:
+ * the response has already been streamed to the user by the time this runs,
+ * so a summary failure never affects the user-visible stream. We also skip
+ * summarisation entirely when no GG-compatible provider is configured — the
+ * cheap `gpt-4o-mini` call costs ~$0.0005 per turn, but a missing key would
+ * surface as an exception every turn, polluting the logs.
+ */
+function persistRecallSummary(
+	conversationId: string,
+	userText: string,
+	assistantText: string,
+): void {
+	if (!userText.trim() || !assistantText.trim()) return;
+	void (async () => {
+		try {
+			const { openai } = await import("@ai-sdk/openai");
+			const { generateText } = await import("ai");
+			const result = await generateText({
+				model: openai("gpt-4o-mini"),
+				system:
+					"Summarise the user's question and the assistant's answer in ONE sentence (max 25 words). Be specific: names, numbers, dates. The summary will be indexed for cross-session memory recall.",
+				messages: [
+					{
+						role: "user",
+						content: `User asked: ${userText.slice(0, 500)}\n\nAssistant answered: ${assistantText.slice(0, 1500)}\n\nOne-sentence summary:`,
+					},
+				],
+			});
+			const summary = result.text.trim();
+			if (!summary) return;
+			const db = getDatabase();
+			db.prepare(
+				"INSERT INTO recall_user_context (id, user_id, conversation_id, query, summary, sources_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			).run(
+				`recall-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+				DEFAULT_USER_ID,
+				conversationId,
+				userText.slice(0, 200),
+				summary.slice(0, 500),
+				null,
+				Date.now(),
+			);
+		} catch (error) {
+			// Best-effort. Logged but never propagated — the user-visible
+			// stream has already completed.
+			console.warn("[chat] recall summary failed:", error);
+		}
+	})();
+}
+
+/**
  * Persist the latest user message server-side before streaming, creating the
  * conversation when needed, so a closed tab can never lose the turn. Returns
  * the (possibly new) conversation id.
@@ -149,8 +210,8 @@ function persistUserTurn(
 		(options.userText ? makeTitle(options.userText) : "New chat");
 	db.transaction(() => {
 		db.prepare(
-			"INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-		).run(conversationId, title, now, now);
+			"INSERT INTO conversations (id, title, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?)",
+		).run(conversationId, title, now, now, DEFAULT_USER_ID);
 		db.prepare(
 			"INSERT INTO conversation_messages (id, conversation_id, role, content, ordinal, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 		).run(
@@ -476,6 +537,10 @@ export async function POST(request: Request): Promise<Response> {
 					...(assistantSources.length > 0 ? { sources: assistantSources } : {}),
 					...(assistantSteps.length > 0 ? { steps: assistantSteps } : {}),
 				});
+				// Feature 5: persist a one-sentence summary so the cross-memory
+				// search can find this turn later. Fire-and-forget — the response
+				// has already been streamed.
+				persistRecallSummary(activeConversationId, userText, assistantText);
 				controller.close();
 			}
 		},

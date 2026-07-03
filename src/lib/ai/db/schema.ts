@@ -120,6 +120,7 @@ export function migrate(db: Database): void {
 	addAutomationSourceHttpCacheColumns(db);
 	addConversationMessagePayloadColumn(db);
 	addDocumentProvenanceColumns(db);
+	addConversationUserIdColumn(db);
 	createDocumentDateIndex(db);
 	createChunksFts(db);
 }
@@ -206,6 +207,28 @@ function addConversationMessagePayloadColumn(db: Database): void {
 	if (!present.has("payload")) {
 		db.exec("ALTER TABLE conversation_messages ADD COLUMN payload TEXT");
 	}
+}
+
+/**
+ * Add a nullable `user_id` column to `conversations` if absent. Feature 5
+ * (AI Recall) keys cross-account memory on this column. Single-user Noledge
+ * populates it with `"default"`; multi-user setups plumb the calling user's
+ * id through the chat route. Backfilling existing rows to `"default"` keeps
+ * the cross-memory search's `c.user_id = ?` filter self-consistent for legacy
+ * conversations that predate the column.
+ */
+function addConversationUserIdColumn(db: Database): void {
+	const columns = db.prepare("PRAGMA table_info(conversations)").all() as {
+		name: string;
+	}[];
+	if (new Set(columns.map((column) => column.name)).has("user_id")) return;
+	db.exec("ALTER TABLE conversations ADD COLUMN user_id TEXT");
+	db.exec(
+		"UPDATE conversations SET user_id = 'default' WHERE user_id IS NULL",
+	);
+	db.exec(
+		"CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id, updated_at DESC)",
+	);
 }
 
 /**

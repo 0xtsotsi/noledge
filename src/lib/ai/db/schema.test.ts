@@ -120,4 +120,31 @@ describe("migrate", () => {
 		expect(cols.has("summary")).toBe(true);
 		expect(cols.has("created_at")).toBe(true);
 	});
+
+	it("adds conversations.user_id on existing dbs and backfills legacy rows", () => {
+		db = openVecDb();
+		// Simulate a pre-F5 DB: conversations table exists without user_id.
+		db.exec(`
+			CREATE TABLE conversations (
+				id TEXT PRIMARY KEY,
+				title TEXT NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+		`);
+		db.prepare(
+			"INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+		).run("c-legacy", "Old chat", 1, 1);
+
+		migrate(db);
+
+		const cols = columnNames(db, "conversations");
+		expect(cols.has("user_id")).toBe(true);
+		// Legacy rows must be backfilled to "default" so cross-memory
+		// searches don't miss them.
+		const row = db
+			.prepare("SELECT user_id FROM conversations WHERE id = ?")
+			.get("c-legacy") as { user_id: string };
+		expect(row.user_id).toBe("default");
+	});
 });
