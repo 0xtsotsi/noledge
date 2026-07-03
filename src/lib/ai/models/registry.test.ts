@@ -120,6 +120,20 @@ describe("model registry", () => {
 		expect(glm.ok && glm.supportsVision).toBe(false);
 	});
 
+	it("returns the resolved catalog id on success (used by web-search routing)", async () => {
+		for (const key of KEYS) delete process.env[key];
+		process.env.OPENAI_API_KEY = "sk-test";
+		const { resolveModel } = await loadRegistry();
+
+		const gpt = resolveModel("gpt-5.5");
+		expect(gpt.ok && gpt.modelId).toBe("gpt-5.5");
+
+		const missing = resolveModel("does-not-exist");
+		// The `ok: false` branch does NOT carry a modelId — only successful
+		// resolutions surface it (used by the chat route's web-search gate).
+		expect(missing.ok).toBe(false);
+	});
+
 	it("errors for an unknown model id", async () => {
 		process.env.OPENAI_API_KEY = "sk-test";
 		const { resolveModel } = await loadRegistry();

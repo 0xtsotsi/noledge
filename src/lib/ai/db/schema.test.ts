@@ -107,4 +107,17 @@ describe("migrate", () => {
 			.get("needle") as { rowid: number } | undefined;
 		expect(row).toBeDefined();
 	});
+
+	it("creates the recall_user_context table (Feature 5 — AI Recall)", () => {
+		db = openVecDb();
+		migrate(db);
+
+		expect(tableExists(db, "recall_user_context")).toBe(true);
+		const cols = columnNames(db, "recall_user_context");
+		expect(cols.has("id")).toBe(true);
+		expect(cols.has("user_id")).toBe(true);
+		expect(cols.has("query")).toBe(true);
+		expect(cols.has("summary")).toBe(true);
+		expect(cols.has("created_at")).toBe(true);
+	});
 });
