@@ -107,10 +107,12 @@ const DEFAULT_USER_ID = "default";
  * pair into `recall_user_context` so the cross-memory search
  * (`src/lib/ai/search/cross-memory.ts`) can find it later. Fire-and-forget:
  * the response has already been streamed to the user by the time this runs,
- * so a summary failure never affects the user-visible stream. We also skip
- * summarisation entirely when no GG-compatible provider is configured — the
- * cheap `gpt-4o-mini` call costs ~$0.0005 per turn, but a missing key would
- * surface as an exception every turn, polluting the logs.
+ * so a summary failure never affects the user-visible stream.
+ *
+ * We skip summarisation when no OpenAI key is configured — Noledge already
+ * requires an OpenAI key for embeddings, so this is a guard for the case
+ * where embeddings are using a non-OpenAI provider. Without the guard,
+ * every turn would log a warning and waste ~$0.0005 of errored work.
  */
 function persistRecallSummary(
 	conversationId: string,
@@ -118,6 +120,12 @@ function persistRecallSummary(
 	assistantText: string,
 ): void {
 	if (!userText.trim() || !assistantText.trim()) return;
+	// Noledge requires an OpenAI key for embeddings (text-embedding-3-small).
+	// If the operator has overridden NOLEDGE_EMBEDDINGS_PROVIDER to a
+	// non-OpenAI backend, the chat route's own model can still be OpenAI-
+	// powered, so we don't gate on the configured chat provider. We gate on
+	// the OpenAI env var directly to keep the check cheap and synchronous.
+	if (!process.env.OPENAI_API_KEY?.trim()) return;
 	void (async () => {
 		try {
 			const { openai } = await import("@ai-sdk/openai");
