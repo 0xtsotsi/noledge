@@ -10,6 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "motion/react";
 
+import { VoiceButton } from "@/components/audio/voice-button";
 import {
 	FileUpload,
 	FileUploadTrigger,
@@ -44,6 +45,10 @@ type ChatInputBarProps = {
 	onThinkingChange: (value: boolean) => void;
 	/** Whether the selected model supports a reasoning trace. */
 	thinkingSupported: boolean;
+	webSearch: boolean;
+	onWebSearchChange: (value: boolean) => void;
+	/** Whether the selected model supports the provider's web-search tool. */
+	webSearchSupported: boolean;
 	suggestions: string[];
 };
 
@@ -61,6 +66,9 @@ export function ChatInputBar({
 	thinking,
 	onThinkingChange,
 	thinkingSupported,
+	webSearch,
+	onWebSearchChange,
+	webSearchSupported,
 	suggestions,
 }: ChatInputBarProps): React.JSX.Element {
 	const isBusy = status === "submitting" || status === "streaming";
@@ -143,12 +151,28 @@ export function ChatInputBar({
 								<Paperclip className="size-5" />
 							</Button>
 						</FileUploadTrigger>
-						<PromptInputAction tooltip="Search the web">
+						<VoiceButton
+							label="Dictate into chat"
+							disabled={isBusy}
+							onTranscript={(text) =>
+								onValueChange(value ? `${value} ${text}` : text)
+							}
+						/>
+						<PromptInputAction
+							tooltip={webSearch ? "Web search on" : "Search the web"}
+						>
 							<Button
 								variant="ghost"
 								size="sm"
 								type="button"
-								className="gap-1.5"
+								disabled={!webSearchSupported}
+								aria-pressed={webSearch}
+								onClick={() => onWebSearchChange(!webSearch)}
+								className={cn(
+									"gap-1.5",
+									webSearch &&
+										"bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
+								)}
 							>
 								<Globe className="size-4" />
 								<span>Search</span>

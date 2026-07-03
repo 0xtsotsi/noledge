@@ -1,4 +1,6 @@
-import { stepCountIs, streamText } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
+import { stepCountIs, streamText, type Tool } from "ai";
 import { z } from "zod";
 import { buildModelMessages } from "@/lib/ai/chat/attachments";
 import {
@@ -54,6 +56,8 @@ const bodySchema = z.object({
 	useRag: z.boolean().optional().default(true),
 	/** Enable the model's reasoning/thinking trace (only affects capable models). */
 	thinking: z.boolean().optional().default(true),
+	/** Opt-in to the provider's web search tool for this turn (Anthropic webSearch / OpenAI webSearchPreview). */
+	webSearch: z.boolean().optional().default(false),
 	/** Browser IANA time zone used for dynamic date instructions. */
 	timeZone: z.string().min(1).optional().default("UTC"),
 });
@@ -272,6 +276,7 @@ export async function POST(request: Request): Promise<Response> {
 		model,
 		useRag,
 		thinking,
+		webSearch,
 		timeZone,
 	} = parsed.data;
 
@@ -353,7 +358,12 @@ export async function POST(request: Request): Promise<Response> {
 						responseStyle: style,
 					}),
 					messages: modelMessages,
-					tools: createKnowledgeTools(request.signal),
+					tools: buildChatTools({
+						baseTools: createKnowledgeTools(request.signal),
+						webSearch,
+						modelId: resolved.modelId,
+						provider: resolved.provider,
+					}),
 					providerOptions: resolved.providerOptions,
 					// Grounding is enforced via the system prompt (always search before
 					// answering). We keep tool choice on "auto" rather than forcing a tool
@@ -472,6 +482,47 @@ export async function POST(request: Request): Promise<Response> {
 	});
 
 	return new Response(stream, { headers: sseHeaders() });
+}
+
+/**
+ * Combine the always-on knowledge tools with the provider's web-search tool,
+ * gated on (a) the user explicitly enabling web search and (b) the resolved
+ * model supporting it. Currently:
+ *   - Anthropic models -> anthropic.tools.webSearch_20260209 (max 5 uses)
+ *   - OpenAI models    -> openai.tools.webSearchPreview()
+ * The untrusted-data framing in  covers any web
+ * snippet that lands in the conversation, so the same threat model applies.
+ */
+type ChatToolsOptions = Readonly<{
+	baseTools: ReturnType<typeof createKnowledgeTools>;
+	webSearch: boolean;
+	modelId: string;
+	provider: import("@/lib/ai/models/types").ProviderId;
+}>;
+
+function buildChatTools({
+	baseTools,
+	webSearch,
+	modelId,
+	provider,
+}: ChatToolsOptions): Record<string, Tool> {
+	const tools: Record<string, Tool> = { ...baseTools };
+	if (!webSearch) return tools;
+	const id = modelId.toLowerCase();
+	if (provider === "anthropic" && id.startsWith("claude-")) {
+		tools.webSearch = anthropic.tools.webSearch_20260209({ maxUses: 5 });
+		return tools;
+	}
+	if (
+		provider === "openai" &&
+		(id.startsWith("gpt-") || id.startsWith("o3") || id.startsWith("o4"))
+	) {
+		tools.webSearch = openai.tools.webSearchPreview({});
+		return tools;
+	}
+	// Web search requested but provider/model doesn't support it in our adapter.
+	// Silently fall back to knowledge-only rather than 500-ing the turn.
+	return tools;
 }
 
 function sseHeaders(): HeadersInit {

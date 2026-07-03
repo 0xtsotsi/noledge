@@ -5,6 +5,10 @@ import { embedTexts, toVectorBlob } from "@/lib/ai/embeddings/embed";
 import { type ChunkOptions, chunkTextWithSpans } from "./chunk";
 import { extractText } from "./extract";
 
+function isMissingEmbeddingConfiguration(error: string): boolean {
+	return error.includes("An OpenAI API key is required for embeddings");
+}
+
 /** Token-mode chunking defaults when a caller doesn't override `chunkOptions`. */
 const DEFAULT_CHUNK_OPTIONS: ChunkOptions = {
 	unit: "token",
@@ -135,8 +139,13 @@ export async function ingestText(
 		chunks.map((chunk) => chunk.content),
 		options.signal,
 	);
-	if (!embedded.ok) return { ok: false, error: embedded.error };
-	if (embedded.embeddings.length !== chunks.length) {
+	const storeWithoutEmbeddings =
+		!embedded.ok && isMissingEmbeddingConfiguration(embedded.error);
+	if (!embedded.ok && !storeWithoutEmbeddings) {
+		return { ok: false, error: embedded.error };
+	}
+	const embeddings = embedded.ok ? embedded.embeddings : null;
+	if (!storeWithoutEmbeddings && embeddings?.length !== chunks.length) {
 		return { ok: false, error: "Embedding count did not match chunk count." };
 	}
 
@@ -169,8 +178,6 @@ export async function ingestText(
 		);
 		chunks.forEach((chunk, ordinal) => {
 			const chunkId = randomUUID();
-			const embedding = embedded.embeddings[ordinal];
-			if (!embedding) throw new Error("Missing embedding for chunk.");
 			// The chunks_fts insert trigger mirrors this row into the FTS index.
 			insertChunk.run(
 				chunkId,
@@ -180,6 +187,10 @@ export async function ingestText(
 				chunk.start,
 				chunk.end,
 			);
+			if (storeWithoutEmbeddings) return;
+			const embedding = embeddings?.[ordinal];
+
+			if (!embedding) throw new Error("Missing embedding for chunk.");
 			insertVec.run(chunkId, toVectorBlob(embedding));
 		});
 	});

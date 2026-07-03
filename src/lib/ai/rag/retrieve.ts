@@ -79,6 +79,10 @@ const DEFAULT_TEXT_WEIGHT = 0.3;
 /** Standard reciprocal-rank-fusion constant (Cormack et al.; used by LangChain). */
 const RRF_K = 60;
 
+function isMissingEmbeddingConfiguration(error: string): boolean {
+	return error.includes("An OpenAI API key is required for embeddings");
+}
+
 type VectorRow = {
 	chunk_id: string;
 	document_id: string;
@@ -191,10 +195,10 @@ export async function retrieveChunks(
 	if (trimmed.length === 0) return { ok: true, chunks: [] };
 
 	const embedded = await embedder([trimmed], options.signal);
-	if (!embedded.ok) return { ok: false, error: embedded.error };
-
-	const queryVector = embedded.embeddings[0];
-	if (!queryVector) return { ok: true, chunks: [] };
+	const queryVector = embedded.ok ? embedded.embeddings[0] : undefined;
+	if (!embedded.ok && !isMissingEmbeddingConfiguration(embedded.error)) {
+		return { ok: false, error: embedded.error };
+	}
 
 	const candidateK = candidateCount(topK);
 	const dateWhere = buildDateWhere(options);
@@ -203,48 +207,50 @@ export async function retrieveChunks(
 		const candidates = new Map<string, Candidate>();
 
 		// Vector arm: KNN overfetch → vScore = clamp01(1 - cosineDistance).
-		const vectorRows = db
-			.prepare(
-				`SELECT
-					v.chunk_id    AS chunk_id,
-					c.document_id AS document_id,
-					d.title       AS document_title,
-					c.content                         AS content,
-					v.distance                        AS distance,
-					c.start                           AS start,
-					c.end                             AS end,
-					d.created_at                      AS created_at,
-					d.published_at                    AS published_at,
-					COALESCE(d.published_at, d.created_at) AS document_date
-				FROM vec_chunks v
-				JOIN chunks c ON c.id = v.chunk_id
-				JOIN documents d ON d.id = c.document_id
-				WHERE v.embedding MATCH ? AND k = ?${dateWhere.clause}
-				ORDER BY v.distance`,
-			)
-			.all(
-				toVectorBlob(queryVector),
-				candidateK,
-				...dateWhere.params,
-			) as VectorRow[];
+		if (queryVector) {
+			const vectorRows = db
+				.prepare(
+					`SELECT
+						v.chunk_id    AS chunk_id,
+						c.document_id AS document_id,
+						d.title       AS document_title,
+						c.content                         AS content,
+						v.distance                        AS distance,
+						c.start                           AS start,
+						c.end                             AS end,
+						d.created_at                      AS created_at,
+						d.published_at                    AS published_at,
+						COALESCE(d.published_at, d.created_at) AS document_date
+					FROM vec_chunks v
+					JOIN chunks c ON c.id = v.chunk_id
+					JOIN documents d ON d.id = c.document_id
+					WHERE v.embedding MATCH ? AND k = ?${dateWhere.clause}
+					ORDER BY v.distance`,
+				)
+				.all(
+					toVectorBlob(queryVector),
+					candidateK,
+					...dateWhere.params,
+				) as VectorRow[];
 
-		vectorRows.forEach((row, rank) => {
-			candidates.set(row.chunk_id, {
-				chunkId: row.chunk_id,
-				documentId: row.document_id,
-				documentTitle: row.document_title,
-				content: row.content,
-				distance: row.distance,
-				start: row.start,
-				end: row.end,
-				createdAt: row.created_at,
-				publishedAt: row.published_at,
-				documentDate: row.document_date,
-				vScore: clamp01(1 - row.distance),
-				vRank: rank,
-				tRank: null,
+			vectorRows.forEach((row, rank) => {
+				candidates.set(row.chunk_id, {
+					chunkId: row.chunk_id,
+					documentId: row.document_id,
+					documentTitle: row.document_title,
+					content: row.content,
+					distance: row.distance,
+					start: row.start,
+					end: row.end,
+					createdAt: row.created_at,
+					publishedAt: row.published_at,
+					documentDate: row.document_date,
+					vScore: clamp01(1 - row.distance),
+					vRank: rank,
+					tRank: null,
+				});
 			});
-		});
+		}
 
 		// Keyword arm: FTS5 overfetch, best-first → 0-based rank per hit.
 		if (hybrid) {

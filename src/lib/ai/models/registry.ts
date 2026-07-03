@@ -37,6 +37,8 @@ export type ResolveModelResult =
 			providerOptions: ProviderOptions | undefined;
 			provider: ProviderId;
 			credentialSource: KeySource;
+			/** Catalog id of the resolved model (e.g. "claude-fable-5"). */
+			modelId: string;
 	  }
 	| { ok: false; error: string };
 
@@ -222,5 +224,6 @@ export function resolveModel(
 		providerOptions: reasoningProviderOptions(entry, thinkingEnabled),
 		provider: entry.provider,
 		credentialSource: credential.source,
+		modelId: entry.id,
 	};
 }

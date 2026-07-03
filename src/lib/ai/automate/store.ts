@@ -10,7 +10,7 @@ import type { PaperType } from "./papers/types";
  * unofficial InnerTube client, so no API key is stored here.
  */
 
-export type SourceType = "rss" | "youtube" | PaperType;
+export type SourceType = "rss" | "youtube" | "webhook" | PaperType;
 export type SourceStatus = "ok" | "error" | "partial" | "skipped";
 
 export type AutomationSource = {
@@ -56,6 +56,7 @@ type SourceRow = {
 /** Map a stored `type` string onto the typed {@link SourceType} union. */
 function toSourceType(type: string): SourceType {
 	if (type === "youtube") return "youtube";
+	if (type === "webhook") return "webhook";
 	if (isPaperType(type)) return type;
 	return "rss";
 }

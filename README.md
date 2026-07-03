@@ -133,3 +133,48 @@ MIT. Do whatever you want with it.
 <p align="center">
   <strong>Stop losing what you learn. Keep it all, and just ask.</strong>
 </p>
+
+---
+
+## Twenty bridge
+
+Noledge exposes an authenticated HTTP bridge under `/api/bridge/*` so external
+apps (Twenty CRM, scripts, ...) can ingest CRM records, search the knowledge
+base, and run grounded agent questions without touching the main UI.
+
+### Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/bridge/health` | Liveness check on Noledge + sqlite-vec. Returns `{ ok, bridge, database, sqliteVecVersion }`. |
+| `POST` | `/api/bridge/search` | Hybrid keyword + vector search. Body: `{ query, topK?, dateFrom?, dateTo? }`. |
+| `POST` | `/api/bridge/ingest` | Store a text document with source provenance. Body: `{ source, objectName, recordId, title, text, sourceUrl?, publishedAt? }`. Re-ingest of the same `(source, objectName:recordId)` pair returns `{ ok: true, duplicate: true, documentId, chunks }`. |
+| `POST` | `/api/bridge/agent` | Run a grounded question. Body: `{ prompt, model?, crmContext? }`. Falls back to a retrieval-only answer when no GG-compatible provider is available or when the upstream call fails. |
+
+### Auth
+
+Every request must carry `x-noledge-bridge-secret: <NOLEDGE_BRIDGE_SECRET>`.
+The secret comes from `.env.local` (or your platform's env) and must match
+what the calling app stores in its Twenty application variables.
+
+### Local dev proxy
+
+Twenty runs in Docker, but Next.js 16's dev server rejects the
+`host.docker.internal` Host header. To keep bridge requests flowing
+cleanly, run the included Node proxy which listens on `:3001` and forwards
+to Noledge on `:3000` with a sanitized `Host` header:
+
+```bash
+npm run bridge:proxy
+```
+
+Set the calling app's `NOLEDGE_BASE_URL` to `http://host.docker.internal:3001`.
+
+### Optional GG Framework agent
+
+When a GG-compatible provider (OpenAI, Anthropic, GLM, Kimi) is configured in
+Noledge, `/api/bridge/agent` runs the question through `@kenkaiiii/gg-agent`
+with three tools (`searchKnowledge`, `listRecentDocuments`, `readCrmContext`).
+When no GG provider is configured, or when the upstream call fails, the
+endpoint returns a retrieval-only answer that includes the CRM context plus
+the agent's error message in the steps.

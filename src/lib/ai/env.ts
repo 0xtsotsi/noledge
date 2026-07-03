@@ -19,8 +19,10 @@ const envSchema = z.object({
 	XIAOMI_API_KEY: z.string().min(1).optional(),
 	DEEPSEEK_API_KEY: z.string().min(1).optional(),
 	OPENROUTER_API_KEY: z.string().min(1).optional(),
+	NOLEDGE_BRIDGE_SECRET: z.string().min(1).optional(),
 	OCR_ENABLED: z
 		.enum(["true", "false"])
+
 		.default("true")
 		.transform((value) => value === "true"),
 	OCR_LANGUAGE: z.string().min(1).default("eng"),
@@ -46,6 +48,7 @@ export function getEnv(): AiEnv {
 		XIAOMI_API_KEY: process.env.XIAOMI_API_KEY,
 		DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
 		OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+		NOLEDGE_BRIDGE_SECRET: process.env.NOLEDGE_BRIDGE_SECRET,
 		OCR_ENABLED: process.env.OCR_ENABLED,
 		OCR_LANGUAGE: process.env.OCR_LANGUAGE,
 	});

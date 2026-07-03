@@ -14,6 +14,13 @@ export const EMBEDDING_DIMENSIONS = 1536;
  * connection open.
  */
 export function migrate(db: Database): void {
+	// Feature 5 (AI Recall): per-user memory summaries. One row per chat
+	// completion — a 1-sentence `gpt-4o-mini` summary of the assistant turn,
+	// persisted at `persistAssistantTurn` time. The cross-memory search
+	// (`src/lib/ai/search/cross-memory.ts`) queries this table by LIKE on
+	// the query+summary columns.
+	ensureRecallUserContextTable(db);
+
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS documents (
 			id         TEXT PRIMARY KEY,
@@ -238,6 +245,28 @@ function addChunkSpanColumns(db: Database): void {
  * retrieval degrades to vector-only at query time rather than failing to open the
  * database.
  */
+/**
+ * Add the `recall_user_context` table if it does not exist. Per-user memory
+ * for cross-session recall (Feature 5). Mirrors the migration pattern used
+ * by `addConversationMessagePayloadColumn` so this can run on existing
+ * databases without a destructive rebuild.
+ */
+function ensureRecallUserContextTable(db: Database): void {
+	db.exec(
+		`CREATE TABLE IF NOT EXISTS recall_user_context (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			conversation_id TEXT,
+			query TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			sources_json TEXT,
+			created_at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_recall_user_context_user_id
+			ON recall_user_context(user_id, created_at DESC);`,
+	);
+}
+
 function createChunksFts(db: Database): void {
 	try {
 		db.exec(

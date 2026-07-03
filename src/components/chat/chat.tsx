@@ -109,6 +109,16 @@ export function Chat(): React.JSX.Element {
 			return true;
 		}
 	});
+	const [webSearch, setWebSearch] = useState<boolean>(() => {
+		if (typeof window === "undefined") return false;
+		try {
+			return window.localStorage.getItem("noledge-web-search") === "on";
+		} catch {
+			return false;
+		}
+	});
+	const webSearchRef = useRef<boolean>(webSearch);
+	webSearchRef.current = webSearch;
 	const [loadingConversation, setLoadingConversation] = useState(
 		Boolean(chatIdFromUrl),
 	);
@@ -156,6 +166,18 @@ export function Chat(): React.JSX.Element {
 			/* ignore storage errors */
 		}
 	}, [thinking]);
+
+	// Persist web search toggle
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(
+				"noledge-web-search",
+				webSearch ? "on" : "off",
+			);
+		} catch {
+			/* ignore storage errors */
+		}
+	}, [webSearch]);
 
 	// Load conversation from URL
 	useEffect(() => {
@@ -334,6 +356,7 @@ export function Chat(): React.JSX.Element {
 						appendUser: options.appendUser ?? true,
 						model: modelRef.current ?? undefined,
 						thinking: thinkingRef.current,
+						webSearch: webSearchRef.current,
 						timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 					}),
 					signal: controller.signal,
@@ -550,6 +573,15 @@ export function Chat(): React.JSX.Element {
 	}
 
 	const thinkingSupported = model ? reasoningModelIds.has(model) : false;
+	// Only Anthropic Claude and OpenAI gpt-/o3/o4 models have a web-search tool
+	// wired in `app/api/chat/route.ts`. Mirror the same gate here so the button
+	// shows as enabled and not stuck-on for unsupported models.
+	const id = model?.toLowerCase() ?? "";
+	const webSearchSupported =
+		id.startsWith("claude-") ||
+		id.startsWith("gpt-") ||
+		id.startsWith("o3") ||
+		id.startsWith("o4");
 	const isEmpty = messages.length === 0;
 
 	if (isEmpty) {
@@ -597,6 +629,9 @@ export function Chat(): React.JSX.Element {
 								thinking={thinking}
 								onThinkingChange={setThinking}
 								thinkingSupported={thinkingSupported}
+								webSearch={webSearch}
+								onWebSearchChange={setWebSearch}
+								webSearchSupported={webSearchSupported}
 								suggestions={suggestions}
 							/>
 						</>
@@ -642,6 +677,9 @@ export function Chat(): React.JSX.Element {
 					thinking={thinking}
 					onThinkingChange={setThinking}
 					thinkingSupported={thinkingSupported}
+					webSearch={webSearch}
+					onWebSearchChange={setWebSearch}
+					webSearchSupported={webSearchSupported}
 					suggestions={suggestions}
 				/>
 			</div>

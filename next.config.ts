@@ -29,6 +29,12 @@ const cspDirectives = [
 const contentSecurityPolicy = cspDirectives.join("; ");
 
 const nextConfig: NextConfig = {
+	allowedDevOrigins: [
+		"host.docker.internal",
+		"host.docker.internal:3000",
+		"http://host.docker.internal:3000",
+		"*.docker.internal",
+	],
 	serverExternalPackages: [
 		"better-sqlite3",
 		"sqlite-vec",
