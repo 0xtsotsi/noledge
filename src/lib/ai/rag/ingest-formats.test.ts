@@ -32,7 +32,8 @@ function fakeVector(text: string): number[] {
 	const lower = text.toLowerCase();
 	for (let i = 0; i < lower.length; i++) {
 		const code = lower.charCodeAt(i);
-		vector[code % EMBEDDING_DIMENSIONS] += 1;
+		const idx = code % EMBEDDING_DIMENSIONS;
+		vector[idx] = (vector[idx] ?? 0) + 1;
 	}
 	const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0)) || 1;
 	return vector.map((v) => v / norm);

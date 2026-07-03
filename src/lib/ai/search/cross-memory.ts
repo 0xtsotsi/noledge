@@ -30,7 +30,10 @@ export type CrossMemoryHit = z.infer<typeof crossMemoryHitSchema>;
 const recallRequestSchema = z.object({
 	query: z.string().min(1),
 	topK: z.number().int().min(1).max(20).optional().default(8),
-	timeRange: z.enum(["day", "week", "month", "year", "all"]).optional().default("all"),
+	timeRange: z
+		.enum(["day", "week", "month", "year", "all"])
+		.optional()
+		.default("all"),
 });
 
 export type RecallRequest = z.infer<typeof recallRequestSchema>;
@@ -66,14 +69,7 @@ function searchRecallContext(
 				 ORDER BY created_at DESC
 				 LIMIT ?`,
 			)
-			.all(
-				userId,
-				`%${query}%`,
-				`%${query}%`,
-				cutoff,
-				cutoff,
-				topK,
-			) as Array<{
+			.all(userId, `%${query}%`, `%${query}%`, cutoff, cutoff, topK) as Array<{
 			id: string;
 			query: string;
 			summary: string;

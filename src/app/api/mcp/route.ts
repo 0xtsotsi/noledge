@@ -39,7 +39,8 @@ const TOOLS = [
 	},
 	{
 		name: "noledge_recall",
-		description: "Cross-account memory recall — searches prior chats, docs, and per-user summaries.",
+		description:
+			"Cross-account memory recall — searches prior chats, docs, and per-user summaries.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -56,7 +57,8 @@ const TOOLS = [
 	},
 	{
 		name: "noledge_ingest",
-		description: "Ingest a text document into Noledge. Same shape as /api/bridge/ingest.",
+		description:
+			"Ingest a text document into Noledge. Same shape as /api/bridge/ingest.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -100,7 +102,11 @@ export async function POST(request: Request): Promise<Response> {
 	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
 	if (!configured || authHeader !== configured) {
 		return Response.json(
-			jsonRpcError(null, -32600, "Unauthorized: x-noledge-bridge-secret header is missing or wrong."),
+			jsonRpcError(
+				null,
+				-32600,
+				"Unauthorized: x-noledge-bridge-secret header is missing or wrong.",
+			),
 		);
 	}
 
@@ -113,7 +119,11 @@ export async function POST(request: Request): Promise<Response> {
 	const parsed = jsonRpcRequestSchema.safeParse(raw);
 	if (!parsed.success) {
 		return Response.json(
-			jsonRpcError(null, -32600, `Invalid Request: ${parsed.error.issues.map((i) => i.message).join(", ")}`),
+			jsonRpcError(
+				null,
+				-32600,
+				`Invalid Request: ${parsed.error.issues.map((i) => i.message).join(", ")}`,
+			),
 		);
 	}
 	const { id, method, params } = parsed.data;
@@ -166,12 +176,10 @@ async function callTool(
 			model && "ok" in model && model.ok
 				? `${model.provider}:${model.model}`
 				: undefined;
-		const result = await runNoledgeAgent(
-			{
-				prompt: query,
-				...(modelSpec ? { model: modelSpec } : {}),
-			},
-		);
+		const result = await runNoledgeAgent({
+			prompt: query,
+			...(modelSpec ? { model: modelSpec } : {}),
+		});
 		if (!result.ok) {
 			return { ok: false, error: result.error };
 		}
@@ -199,7 +207,9 @@ async function callTool(
 		const objectName =
 			typeof params.objectName === "string" ? params.objectName : "mcp-doc";
 		const recordId =
-			typeof params.recordId === "string" ? params.recordId : `mcp-${Date.now()}`;
+			typeof params.recordId === "string"
+				? params.recordId
+				: `mcp-${Date.now()}`;
 		const { ingestText } = await import("@/lib/ai/rag/ingest");
 		const result = await ingestText({
 			title,
@@ -228,7 +238,10 @@ async function callTool(
 	throw new Error(`Unknown tool: ${name}`);
 }
 
-function jsonRpcOk(id: unknown, result: unknown): {
+function jsonRpcOk(
+	id: unknown,
+	result: unknown,
+): {
 	jsonrpc: "2.0";
 	id: unknown;
 	result: unknown;
@@ -236,7 +249,11 @@ function jsonRpcOk(id: unknown, result: unknown): {
 	return { jsonrpc: "2.0", id, result };
 }
 
-function jsonRpcError(id: unknown, code: number, message: string): {
+function jsonRpcError(
+	id: unknown,
+	code: number,
+	message: string,
+): {
 	jsonrpc: "2.0";
 	id: unknown;
 	error: { code: number; message: string };

@@ -135,7 +135,11 @@ export async function POST(request: Request): Promise<Response> {
 					})(),
 				]);
 
-				send({ agent: "system", type: "divergence", note: "See front-end for divergence computation." });
+				send({
+					agent: "system",
+					type: "divergence",
+					note: "See front-end for divergence computation.",
+				});
 				send({ agent: "system", type: "complete" });
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

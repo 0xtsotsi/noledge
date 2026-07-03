@@ -6,7 +6,10 @@ export const runtime = "nodejs";
 const recallRequestSchema = z.object({
 	query: z.string().min(1).max(500),
 	topK: z.number().int().min(1).max(20).optional().default(8),
-	timeRange: z.enum(["day", "week", "month", "year", "all"]).optional().default("all"),
+	timeRange: z
+		.enum(["day", "week", "month", "year", "all"])
+		.optional()
+		.default("all"),
 	userId: z.string().min(1).optional(),
 });
 

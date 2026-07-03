@@ -47,9 +47,16 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const entries = perRecordTimeline(parsed.data.objectName, parsed.data.recordId);
+	const entries = perRecordTimeline(
+		parsed.data.objectName,
+		parsed.data.recordId,
+	);
 	if (entries.length === 0) {
-		return Response.json({ ok: true, narrative: "Not enough data yet.", entryCount: 0 });
+		return Response.json({
+			ok: true,
+			narrative: "Not enough data yet.",
+			entryCount: 0,
+		});
 	}
 
 	const entriesForModel = entries
@@ -91,8 +98,7 @@ export async function POST(request: Request): Promise<Response> {
 				}
 				send({ type: "done" });
 			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : String(error);
+				const message = error instanceof Error ? error.message : String(error);
 				send({ type: "error", message });
 			} finally {
 				controller.close();

@@ -61,8 +61,8 @@ function detectConflicts(
 	}> = [];
 	for (const [title, group] of byTitle.entries()) {
 		if (group.length < 2) continue;
-		const first = group[0].slice(0, 40);
-		const second = group[1].slice(0, 40);
+		const first = group[0]?.slice(0, 40) ?? "";
+		const second = group[1]?.slice(0, 40) ?? "";
 		if (first !== second) {
 			conflicts.push({
 				title,

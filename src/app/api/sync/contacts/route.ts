@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { getDatabase } from "@/lib/ai/db/client";
 import { syncGoogleContacts } from "@/lib/ai/automate/sync-contacts";
+import { getDatabase } from "@/lib/ai/db/client";
 
 export const runtime = "nodejs";
 

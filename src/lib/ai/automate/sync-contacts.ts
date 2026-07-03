@@ -95,6 +95,8 @@ function recordConflict(
 	);
 }
 
+export { recordConflict };
+
 /**
  * List Google Contacts via the People API. Returns the parsed list of
  * `GoogleContact` objects. Requires the user to have authorised the
@@ -114,7 +116,9 @@ export async function fetchGoogleContacts(
 		{ headers: { Authorization: `Bearer ${token}` } },
 	);
 	if (!response.ok) {
-		throw new Error(`Google People API ${response.status}: ${await response.text()}`);
+		throw new Error(
+			`Google People API ${response.status}: ${await response.text()}`,
+		);
 	}
 	const data = (await response.json()) as {
 		connections?: Array<{

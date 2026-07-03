@@ -223,9 +223,7 @@ function addConversationUserIdColumn(db: Database): void {
 	}[];
 	if (new Set(columns.map((column) => column.name)).has("user_id")) return;
 	db.exec("ALTER TABLE conversations ADD COLUMN user_id TEXT");
-	db.exec(
-		"UPDATE conversations SET user_id = 'default' WHERE user_id IS NULL",
-	);
+	db.exec("UPDATE conversations SET user_id = 'default' WHERE user_id IS NULL");
 	db.exec(
 		"CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id, updated_at DESC)",
 	);
