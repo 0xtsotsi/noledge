@@ -69,7 +69,8 @@ const ingestTextMock = vi.fn(async () => ({
 }));
 
 vi.mock("@/lib/ai/rag/ingest", () => ({
-	ingestText: ingestTextMock as unknown as typeof import("@/lib/ai/rag/ingest").ingestText,
+	ingestText:
+		ingestTextMock as unknown as typeof import("@/lib/ai/rag/ingest").ingestText,
 	ingestDocument: vi.fn(async () => ({
 		ok: true as const,
 		documentId: "stub-document-id",
