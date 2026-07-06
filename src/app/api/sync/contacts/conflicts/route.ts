@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { getDatabase } from "@/lib/ai/db/client";
+import { validateBridgeRequest } from "@/lib/bridge/auth";
 
 export const runtime = "nodejs";
 
 const querySchema = z.object({
 	provider: z.string().optional().default("google-contacts"),
 	limit: z.coerce.number().int().min(1).max(500).optional().default(50),
+	// When true, resolved rows are returned too (with their `resolved_at` and
+	// `resolved_choice` populated). Defaults to false so callers see the open
+	// queue by default.
+	includeResolved: z.coerce.boolean().optional(),
 });
 
 type ConflictRow = {
@@ -32,16 +37,14 @@ type ConflictRow = {
  * here too so a GET against an empty Noledge doesn't 500.
  */
 export async function GET(request: Request): Promise<Response> {
-	const authHeader = request.headers.get("x-noledge-bridge-secret");
-	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
-	if (!configured || authHeader !== configured) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
+	const auth = validateBridgeRequest(request);
+	if (!auth.ok) return auth.response;
 
 	const url = new URL(request.url);
 	const parsed = querySchema.safeParse({
 		provider: url.searchParams.get("provider") ?? undefined,
 		limit: url.searchParams.get("limit") ?? undefined,
+		includeResolved: url.searchParams.get("includeResolved") ?? undefined,
 	});
 	if (!parsed.success) {
 		return Response.json(
@@ -60,17 +63,25 @@ export async function GET(request: Request): Promise<Response> {
 			field TEXT NOT NULL,
 			local_value TEXT,
 			remote_value TEXT,
-			detected_at INTEGER NOT NULL
+			detected_at INTEGER NOT NULL,
+			resolved_at INTEGER,
+			resolved_choice TEXT
 		)`,
 	);
 
 	const rows = db
 		.prepare(
-			`SELECT id, provider, object_name, record_id, field, local_value, remote_value, detected_at
-			 FROM sync_conflicts
-			 WHERE provider = ?
-			 ORDER BY detected_at DESC
-			 LIMIT ?`,
+			parsed.data.includeResolved
+				? `SELECT id, provider, object_name, record_id, field, local_value, remote_value, detected_at, resolved_at, resolved_choice
+					 FROM sync_conflicts
+					 WHERE provider = ?
+					 ORDER BY detected_at DESC
+					 LIMIT ?`
+				: `SELECT id, provider, object_name, record_id, field, local_value, remote_value, detected_at
+					 FROM sync_conflicts
+					 WHERE provider = ? AND resolved_at IS NULL
+					 ORDER BY detected_at DESC
+					 LIMIT ?`,
 		)
 		.all(parsed.data.provider, parsed.data.limit) as Array<{
 		id: string;
@@ -81,6 +92,8 @@ export async function GET(request: Request): Promise<Response> {
 		local_value: string | null;
 		remote_value: string | null;
 		detected_at: number;
+		resolved_at?: number | null;
+		resolved_choice?: string | null;
 	}>;
 
 	const conflicts: ConflictRow[] = rows.map((row) => ({

@@ -1,6 +1,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
 import { z } from "zod";
+import { validateBridgeRequest } from "@/lib/bridge/auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -30,11 +31,8 @@ sources (e.g. "per the Nov 12 transcript").`;
  * `propose-write-tournament.logic-function.ts`. The cost meter tracks it.
  */
 export async function POST(request: Request): Promise<Response> {
-	const authHeader = request.headers.get("x-noledge-bridge-secret");
-	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
-	if (!configured || authHeader !== configured) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
+	const auth = validateBridgeRequest(request);
+	if (!auth.ok) return auth.response;
 
 	let raw: unknown;
 	try {

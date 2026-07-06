@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { crossMemoryRecall } from "@/lib/ai/search/cross-memory";
+import { validateBridgeRequest } from "@/lib/bridge/auth";
 
 export const runtime = "nodejs";
 
@@ -26,11 +27,8 @@ const recallRequestSchema = z.object({
  * memory is out of scope; see batch3 plan § Feature 5.
  */
 export async function POST(request: Request): Promise<Response> {
-	const authHeader = request.headers.get("x-noledge-bridge-secret");
-	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
-	if (!configured || authHeader !== configured) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
+	const auth = validateBridgeRequest(request);
+	if (!auth.ok) return auth.response;
 
 	let raw: unknown;
 	try {

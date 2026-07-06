@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { syncGoogleContacts } from "@/lib/ai/automate/sync-contacts";
 import { getDatabase } from "@/lib/ai/db/client";
+import { validateBridgeRequest } from "@/lib/bridge/auth";
 
 export const runtime = "nodejs";
 
@@ -21,11 +22,8 @@ const syncRequestSchema = z.object({
  * the actual cadence is operator-configured (see `automation_config`).
  */
 export async function POST(request: Request): Promise<Response> {
-	const authHeader = request.headers.get("x-noledge-bridge-secret");
-	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
-	if (!configured || authHeader !== configured) {
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
-	}
+	const auth = validateBridgeRequest(request);
+	if (!auth.ok) return auth.response;
 
 	let raw: unknown = {};
 	try {
@@ -42,11 +40,24 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	try {
-		// Ensure the conflicts table exists in fresh databases.
-		getDatabase().exec(
-			"CREATE TABLE IF NOT EXISTS sync_conflicts (id TEXT PRIMARY KEY, provider TEXT NOT NULL, object_name TEXT NOT NULL, record_id TEXT NOT NULL, field TEXT NOT NULL, local_value TEXT, remote_value TEXT, detected_at INTEGER NOT NULL)",
+		// Ensure the conflicts table exists in fresh databases — the canonical
+		// migration lives in `src/lib/ai/db/schema.ts`, but older DBs created
+		// before `resolved_at` was added still need the column at runtime.
+		const db = getDatabase();
+		db.exec(
+			"CREATE TABLE IF NOT EXISTS sync_conflicts (id TEXT PRIMARY KEY, provider TEXT NOT NULL, object_name TEXT NOT NULL, record_id TEXT NOT NULL, field TEXT NOT NULL, local_value TEXT, remote_value TEXT, detected_at INTEGER NOT NULL, resolved_at INTEGER)",
 		);
-		const result = await syncGoogleContacts();
+		// Best-effort column add for pre-existing tables. PRAGMA returns the
+		// `resolved_at` row when it already exists; otherwise we ALTER it in.
+		const cols = db
+			.prepare("PRAGMA table_info(sync_conflicts)")
+			.all() as Array<{
+			name: string;
+		}>;
+		if (!cols.some((c) => c.name === "resolved_at")) {
+			db.exec("ALTER TABLE sync_conflicts ADD COLUMN resolved_at INTEGER");
+		}
+		const result = await syncGoogleContacts(fetch);
 		return Response.json(result);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

@@ -147,4 +147,101 @@ describe("migrate", () => {
 			.get("c-legacy") as { user_id: string };
 		expect(row.user_id).toBe("default");
 	});
+
+	it("creates the people_cache table keyed by record_id (Twenty contact mirror)", () => {
+		db = openVecDb();
+		migrate(db);
+
+		// Schema shape: keyed by Twenty's record_id; emails + phones stored as
+		// JSON arrays so we don't need a separate join table for v1.
+		expect(tableExists(db, "people_cache")).toBe(true);
+		const cols = columnNames(db, "people_cache");
+		expect(cols.has("record_id")).toBe(true);
+		expect(cols.has("emails_json")).toBe(true);
+		expect(cols.has("phones_json")).toBe(true);
+		expect(cols.has("updated_at")).toBe(true);
+
+		// Primary key is record_id — duplicate inserts must conflict so the
+		// upsertPeopleCache ON CONFLICT branch is the only writer.
+		const insert = db.prepare(
+			"INSERT INTO people_cache (record_id, emails_json, phones_json, updated_at) VALUES (?, ?, ?, ?)",
+		);
+		insert.run("rec-1", "[]", "[]", 1);
+		expect(() => insert.run("rec-1", "[]", "[]", 2)).toThrow(
+			/UNIQUE constraint failed/,
+		);
+	});
+
+	it("creates the sync_conflicts table with a nullable resolved_at and resolved_choice", () => {
+		db = openVecDb();
+		migrate(db);
+
+		// Schema shape: one row per divergent field; `resolved_at` is the gate
+		// that hides a row from the ConflictReviewPanel once dismissed;
+		// `resolved_choice` records which side won
+		// (`'remote'|'local'|null` for dismissals) so the resolve action's
+		// audit trail survives the row being filtered out of the panel.
+		expect(tableExists(db, "sync_conflicts")).toBe(true);
+		const cols = columnNames(db, "sync_conflicts");
+		expect(cols.has("id")).toBe(true);
+		expect(cols.has("provider")).toBe(true);
+		expect(cols.has("object_name")).toBe(true);
+		expect(cols.has("record_id")).toBe(true);
+		expect(cols.has("field")).toBe(true);
+		expect(cols.has("local_value")).toBe(true);
+		expect(cols.has("remote_value")).toBe(true);
+		expect(cols.has("detected_at")).toBe(true);
+		expect(cols.has("resolved_at")).toBe(true);
+		expect(cols.has("resolved_choice")).toBe(true);
+
+		// Insert with resolved_at = NULL + resolved_choice NULL (open), then
+		// with resolved_at set + resolved_choice set (resolved via accept_remote).
+		// Both must succeed; resolved_choice is optional so unresolved rows
+		// leave it NULL without a separate column for "open".
+		const insert = db.prepare(
+			`INSERT INTO sync_conflicts
+				(id, provider, object_name, record_id, field, local_value, remote_value, detected_at, resolved_at, resolved_choice)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		);
+		insert.run(
+			"c-1",
+			"google-contacts",
+			"contact",
+			"people/c1",
+			"phone",
+			"+1",
+			"+2",
+			1,
+			null,
+			null,
+		);
+		insert.run(
+			"c-2",
+			"google-contacts",
+			"contact",
+			"people/c2",
+			"email",
+			"a@x",
+			"b@x",
+			2,
+			2,
+			"remote",
+		);
+
+		const openCount = (
+			db
+				.prepare(
+					"SELECT COUNT(*) AS n FROM sync_conflicts WHERE resolved_at IS NULL",
+				)
+				.get() as { n: number }
+		).n;
+		expect(openCount).toBe(1);
+
+		// The resolved row must have its choice persisted alongside the
+		// timestamp — that's the audit trail the conflict-review UI relies on.
+		const resolved = db
+			.prepare("SELECT resolved_choice FROM sync_conflicts WHERE id = ?")
+			.get("c-2") as { resolved_choice: string | null };
+		expect(resolved.resolved_choice).toBe("remote");
+	});
 });

@@ -21,6 +21,19 @@ export function migrate(db: Database): void {
 	// the query+summary columns.
 	ensureRecallUserContextTable(db);
 
+	// Local mirror of Twenty People records (contact sync v1). Keyed by
+	// Twenty's `record_id` so the upsert in `src/lib/ai/people-cache.ts`
+	// has a unique conflict target. `emails_json`/`phones_json` are JSON
+	// arrays (stringified) — v1 doesn't need a join table.
+	ensurePeopleCacheTable(db);
+
+	// Field-level conflicts detected by external sync providers (e.g. Google
+	// Contacts). One row per divergent field. `resolved_at IS NULL` is the
+	// "open" gate used by the ConflictReviewPanel; once a row is resolved
+	// `resolved_choice` records which side won (`'remote'|'local'|null` for
+	// dismissals).
+	ensureSyncConflictsTable(db);
+
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS documents (
 			id         TEXT PRIMARY KEY,
@@ -285,6 +298,49 @@ function ensureRecallUserContextTable(db: Database): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_recall_user_context_user_id
 			ON recall_user_context(user_id, created_at DESC);`,
+	);
+}
+
+/**
+ * Add the `people_cache` table if missing. No-op on existing DBs.
+ * Mirrors the `ensureRecallUserContextTable` migration pattern so this
+ * can run on existing databases without a destructive rebuild.
+ */
+function ensurePeopleCacheTable(db: Database): void {
+	db.exec(
+		`CREATE TABLE IF NOT EXISTS people_cache (
+			record_id    TEXT PRIMARY KEY,
+			emails_json  TEXT NOT NULL,
+			phones_json  TEXT NOT NULL,
+			updated_at   INTEGER NOT NULL
+		);`,
+	);
+}
+
+/**
+ * Add the `sync_conflicts` table if missing. One row per divergent
+ * (provider, object, record, field) tuple. `resolved_at` is the gate
+ * that hides a row from the ConflictReviewPanel once dismissed;
+ * `resolved_choice` records which side won when the operator resolves
+ * (accept_remote → 'remote', accept_local → 'local', dismiss → NULL).
+ */
+function ensureSyncConflictsTable(db: Database): void {
+	db.exec(
+		`CREATE TABLE IF NOT EXISTS sync_conflicts (
+			id              TEXT PRIMARY KEY,
+			provider        TEXT NOT NULL,
+			object_name     TEXT NOT NULL,
+			record_id       TEXT NOT NULL,
+			field           TEXT NOT NULL,
+			local_value     TEXT,
+			remote_value    TEXT,
+			detected_at     INTEGER NOT NULL,
+			resolved_at     INTEGER,
+			resolved_choice TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_sync_conflicts_open
+			ON sync_conflicts(provider, object_name, record_id)
+			WHERE resolved_at IS NULL;`,
 	);
 }
 

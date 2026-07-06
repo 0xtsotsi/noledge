@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+	type SourceLists,
+	takeFromLists,
+} from "@/hooks/optimistic-source-lists";
+import { notifyError, toMessage } from "@/lib/toast";
 
 export type SourceType =
 	| "rss"
@@ -77,7 +82,10 @@ export function useAutomation(): {
 	youtube: AutomationSourceItem[];
 	papers: AutomationSourceItem[];
 	loading: boolean;
-	reloadConfig: () => Promise<void>;
+	/** Latest config-fetch or config-write error, or `null`. Cleared on the
+	 * next successful `reloadConfig` or `saveSchedule`. */
+	configError: string | null;
+	reloadConfig: () => Promise<Result<AutomationConfigState>>;
 	reloadSources: () => Promise<void>;
 	saveSchedule: (
 		scheduleHour: number | null,
@@ -101,11 +109,27 @@ export function useAutomation(): {
 	const [youtube, setYoutube] = useState<AutomationSourceItem[]>([]);
 	const [papers, setPapers] = useState<AutomationSourceItem[]>([]);
 	const [loading, setLoading] = useState(true);
+	const [configError, setConfigError] = useState<string | null>(null);
 
-	const reloadConfig = useCallback(async (): Promise<void> => {
-		const response = await fetch("/api/automate/config");
-		if (response.ok)
-			setConfig((await response.json()) as AutomationConfigState);
+	const reloadConfig = useCallback(async (): Promise<
+		Result<AutomationConfigState>
+	> => {
+		try {
+			const response = await fetch("/api/automate/config");
+			if (!response.ok) {
+				const error = await readError(response);
+				setConfigError(error);
+				return { ok: false, error };
+			}
+			const value = (await response.json()) as AutomationConfigState;
+			setConfig(value);
+			setConfigError(null);
+			return { ok: true, value };
+		} catch (err) {
+			const error = toMessage(err, "Failed to load config.");
+			setConfigError(error);
+			return { ok: false, error };
+		}
 	}, []);
 
 	const reloadSources = useCallback(async (): Promise<void> => {
@@ -134,15 +158,26 @@ export function useAutomation(): {
 			scheduleHour: number | null,
 			timezone: string | null,
 		): Promise<Result<AutomationConfigState>> => {
-			const response = await fetch("/api/automate/config", {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ scheduleHour, timezone }),
-			});
-			if (!response.ok) return { ok: false, error: await readError(response) };
-			const value = (await response.json()) as AutomationConfigState;
-			setConfig(value);
-			return { ok: true, value };
+			try {
+				const response = await fetch("/api/automate/config", {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ scheduleHour, timezone }),
+				});
+				if (!response.ok) {
+					const error = await readError(response);
+					setConfigError(error);
+					return { ok: false, error };
+				}
+				const value = (await response.json()) as AutomationConfigState;
+				setConfig(value);
+				setConfigError(null);
+				return { ok: true, value };
+			} catch (err) {
+				const error = toMessage(err, "Failed to save schedule.");
+				setConfigError(error);
+				return { ok: false, error };
+			}
 		},
 		[],
 	);
@@ -192,14 +227,53 @@ export function useAutomation(): {
 		[],
 	);
 
-	const removeSource = useCallback(async (id: string): Promise<void> => {
-		await fetch(`/api/automate/sources?id=${encodeURIComponent(id)}`, {
-			method: "DELETE",
-		});
-		setRss((prev) => prev.filter((s) => s.id !== id));
-		setYoutube((prev) => prev.filter((s) => s.id !== id));
-		setPapers((prev) => prev.filter((s) => s.id !== id));
-	}, []);
+	/**
+	 * Optimistically remove a source from local state, then DELETE it.
+	 * On any failure (network or non-2xx) re-insert the source into its
+	 * captured list. The pure strategy (remove + restore across three
+	 * lists with race-safe prepend) lives in
+	 * `optimistic-source-lists.ts` so the rollback logic is unit-testable
+	 * under the node-env vitest setup.
+	 */
+	const removeSource = useCallback(
+		async (id: string): Promise<void> => {
+			const lists: SourceLists = { rss, youtube, papers };
+			const snapshot = takeFromLists(lists, id);
+			const setList = (key: "rss" | "youtube" | "papers") =>
+				key === "rss" ? setRss : key === "youtube" ? setYoutube : setPapers;
+
+			// Optimistic remove
+			if (snapshot)
+				setList(snapshot.listKey)((prev) => prev.filter((s) => s.id !== id));
+
+			// Restore helper used on any failure path
+			const restore = () => {
+				if (!snapshot) return;
+				setList(snapshot.listKey)((prev) => {
+					if (prev.some((s) => s.id === snapshot.item.id)) return prev;
+					return [snapshot.item, ...prev];
+				});
+			};
+
+			try {
+				const response = await fetch(
+					`/api/automate/sources?id=${encodeURIComponent(id)}`,
+					{ method: "DELETE" },
+				);
+				if (!response.ok) {
+					restore();
+					notifyError(
+						`Remove failed (${response.status}).`,
+						"Could not remove the source.",
+					);
+				}
+			} catch (err) {
+				restore();
+				notifyError(err, "Could not remove the source.");
+			}
+		},
+		[rss, youtube, papers],
+	);
 
 	const syncNow = useCallback(async (): Promise<Result<PollSummary>> => {
 		const response = await fetch("/api/automate/run", { method: "POST" });
@@ -215,6 +289,7 @@ export function useAutomation(): {
 		youtube,
 		papers,
 		loading,
+		configError,
 		reloadConfig,
 		reloadSources,
 		saveSchedule,

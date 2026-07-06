@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { retrieveChunks } from "@/lib/ai/rag/retrieve";
+import { validateBridgeRequest } from "@/lib/bridge/auth";
 import { runNoledgeAgent } from "@/lib/gg/noledge-agent";
 import { resolveGgModel } from "@/lib/gg/resolve-gg-model";
 
@@ -98,9 +99,8 @@ export async function POST(request: Request): Promise<Response> {
 	// just the bridge secret). For deployments that expose Noledge on a
 	// public URL, the operator MUST put it behind a reverse proxy with IP
 	// allow-listing — there's no per-user auth model in v1.
-	const authHeader = request.headers.get("x-noledge-bridge-secret");
-	const configured = process.env.NOLEDGE_BRIDGE_SECRET;
-	if (!configured || authHeader !== configured) {
+	const auth = validateBridgeRequest(request);
+	if (!auth.ok) {
 		return Response.json(
 			jsonRpcError(
 				null,

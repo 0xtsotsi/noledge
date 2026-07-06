@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/ai/db/client";
+import { upsertPeopleCache } from "@/lib/ai/people-cache";
 import { ingestText } from "@/lib/ai/rag/ingest";
 import { validateBridgeRequest } from "@/lib/bridge/auth";
 import {
@@ -46,6 +47,40 @@ export async function POST(request: Request): Promise<Response> {
 	const input = parsed.data;
 	const publishedAt = input.publishedAt ? Date.parse(input.publishedAt) : null;
 	const externalId = `${input.objectName}:${input.recordId}`;
+
+	// Mirror contact rows into the local people_cache so the Google Contacts
+	// sync can diff against the Twenty-side snapshot.
+	//
+	// v2 contract (B15): failures here are NOT best-effort. A people-cache
+	// write that throws indicates a real DB problem (schema drift, disk full,
+	// lock contention). Silently swallowing it would let the RAG ingest
+	// proceed against a stale local mirror — exactly the divergence the
+	// contact-sync is meant to surface. We re-throw after logging and convert
+	// to a structured 500 JSON at the route boundary, matching the route's
+	// other `ok:false` shape so callers (Twenty bridge) can parse it.
+	// RAG ingest is intentionally not invoked when the mirror is unhealthy
+	// — better a 500 than a hidden drift between the local cache and Twenty.
+	if (input.objectName === "contact" && input.fields) {
+		try {
+			upsertPeopleCache(
+				input.recordId,
+				input.fields.emails ?? [],
+				input.fields.phones ?? [],
+			);
+		} catch (err) {
+			console.error("upsertPeopleCache failed", err);
+			return Response.json(
+				{
+					ok: false,
+					error:
+						err instanceof Error
+							? err.message
+							: "people-cache mirror write failed",
+				},
+				{ status: 500 },
+			);
+		}
+	}
 
 	const result = await ingestText(
 		{
