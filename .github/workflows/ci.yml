@@ -18,10 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # SC-001 (2026-07-06): SHA-pinned to commit, not the mutable @v4 tag.
+        # Update via Dependabot / renovate when upgrading. Verified against
+        # https://github.com/actions/checkout/releases/tag/v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        # SC-001: SHA-pinned. Verified against
+        # https://github.com/actions/setup-node/releases/tag/v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
